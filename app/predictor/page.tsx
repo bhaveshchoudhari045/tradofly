@@ -36,10 +36,17 @@ export default function PredictorPage() {
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => {
-    setMounted(true);
-    if (!isAuthenticated) register("Demo User", "demo@tradofly.com", 1000000);
-  }, []);
+  // ✅ CORRECT — only registers once, never wipes existing data
+useEffect(() => {
+  setMounted(true);
+}, []);
+
+// Separate effect, only runs if truly not authenticated
+useEffect(() => {
+  if (mounted && !isAuthenticated) {
+    register("Demo User", "demo@tradofly.com", 1000000);
+  }
+}, [mounted, isAuthenticated]);
 
   async function loadData(sym: string) {
     setLoading(true);
@@ -292,7 +299,7 @@ export default function PredictorPage() {
                         borderRadius: 8,
                         fontSize: 12,
                       }}
-                      formatter={(v: any, name: string) => [
+                      formatter={(v: any, name: any) => [
                         `₹${Number(v).toFixed(2)}`,
                         name === "close" ? "Price" : "Forecast",
                       ]}

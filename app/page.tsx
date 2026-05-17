@@ -19,28 +19,35 @@ import {
 } from "@/lib/technicals";
 
 const DEFAULT_SYMBOL = "RELIANCE.NS";
-const DEFAULT_NAME = "Reliance Industries";
 
 export default function Home() {
   const { theme, isAuthenticated, register } = useAppStore();
+  const [mounted, setMounted] = useState(false);
   const [quote, setQuote] = useState<StockQuote | null>(null);
   const [history, setHistory] = useState<HistoricalData[]>([]);
   const [signals, setSignals] = useState<TechnicalSignal[]>([]);
   const [patterns, setPatterns] = useState<PatternDetection[]>([]);
   const [symbol, setSymbol] = useState(DEFAULT_SYMBOL);
   const [loading, setLoading] = useState(true);
-  const [showTrade, setShowTrade] = useState(false);
 
+  // Step 1 — mark mounted
   useEffect(() => {
-    if (!isAuthenticated) {
+    setMounted(true);
+  }, []);
+
+  // Step 2 — register only if not already authenticated
+  useEffect(() => {
+    if (mounted && !isAuthenticated) {
       register("Demo User", "demo@tradofly.com", 1000000);
     }
-  }, [isAuthenticated, register]);
+  }, [mounted, isAuthenticated]);
 
+  // Step 3 — sync theme
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
+  // Step 4 — load stock data
   async function loadStock(sym: string) {
     setLoading(true);
     try {
@@ -52,21 +59,15 @@ export default function Home() {
       ]);
       const quoteData: StockQuote = await quoteRes.json();
       const rawHistory = await histRes.json();
-
-      // Guard: only proceed if valid array
       if (!Array.isArray(rawHistory) || rawHistory.length === 0) {
-        console.error("No history data for", sym);
         setLoading(false);
         return;
       }
-
       const enriched = enrichWithIndicators(rawHistory);
-      const sigs = generateSignals(enriched);
-      const pats = detectPatterns(enriched);
       setQuote(quoteData);
       setHistory(enriched);
-      setSignals(sigs);
-      setPatterns(pats);
+      setSignals(generateSignals(enriched));
+      setPatterns(detectPatterns(enriched));
     } catch (e) {
       console.error(e);
     } finally {
@@ -75,19 +76,16 @@ export default function Home() {
   }
 
   useEffect(() => {
-    loadStock(symbol);
-  }, [symbol]);
+    if (mounted) loadStock(symbol);
+  }, [symbol, mounted]);
 
-  function handleSelect(sym: string) {
-    setSymbol(sym);
-  }
+  if (!mounted) return null;
 
   return (
     <AppLayout>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* Search */}
         <StockSearch
-          onSelect={handleSelect}
+          onSelect={(sym) => setSymbol(sym)}
           defaultSymbol={symbol}
           placeholder="Search NSE/BSE stocks..."
         />
@@ -112,17 +110,14 @@ export default function Home() {
               gap: 16,
             }}
           >
-            {/* Left column */}
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div className="card" style={{ padding: 20 }}>
                 <StockChart data={history} symbol={symbol} height={400} />
               </div>
               <TechnicalSignals signals={signals} patterns={patterns} />
             </div>
-
-            {/* Right column */}
             <div>
-              <QuoteCard quote={quote} onTrade={() => setShowTrade(true)} />
+              <QuoteCard quote={quote} />
             </div>
           </div>
         )}

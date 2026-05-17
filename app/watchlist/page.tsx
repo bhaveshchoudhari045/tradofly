@@ -20,10 +20,17 @@ export default function WatchlistPage() {
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    setMounted(true);
-    if (!isAuthenticated) register("Demo User", "demo@tradofly.com", 1000000);
-  }, []);
+  // ✅ CORRECT — only registers once, never wipes existing data
+useEffect(() => {
+  setMounted(true);
+}, []);
+
+// Separate effect, only runs if truly not authenticated
+useEffect(() => {
+  if (mounted && !isAuthenticated) {
+    register("Demo User", "demo@tradofly.com", 1000000);
+  }
+}, [mounted, isAuthenticated]);
 
   async function fetchAll() {
     if (watchlist.length === 0) return;

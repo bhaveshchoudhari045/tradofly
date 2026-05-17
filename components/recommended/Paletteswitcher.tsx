@@ -4,216 +4,116 @@ import {
   PALETTES,
   type PaletteId,
 } from "@/store/paletteStore";
+import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export default function PaletteSwitcher() {
   const { activePalette, setPalette, getPalette } = usePaletteStore();
+  const [open, setOpen] = useState(false);
   const palette = getPalette();
-  const [mounted, setMounted] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-  if (!mounted) return null;
 
   return (
-    <div
-      style={{
-        position: "relative",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-      }}
-    >
-      {/* Current palette badge */}
+    <div style={{ position: "relative" }}>
       <button
-        onClick={() => setExpanded((e) => !e)}
+        onClick={() => setOpen(!open)}
         style={{
           display: "flex",
           alignItems: "center",
           gap: 8,
-          padding: "6px 14px 6px 10px",
-          borderRadius: 999,
-          background: `rgba(${palette.accentRgb}, 0.1)`,
-          border: `1px solid rgba(${palette.accentRgb}, 0.3)`,
+          padding: "7px 14px",
+          borderRadius: 8,
+          border: "1px solid var(--border-card)",
+          background: "var(--bg-card)",
+          color: "var(--text-primary)",
           cursor: "pointer",
-          transition: "all 0.2s",
-          boxShadow: expanded
-            ? `0 0 16px rgba(${palette.accentRgb}, 0.3)`
-            : "none",
+          fontSize: 12,
+          fontWeight: 600,
         }}
       >
         <div
           style={{
-            width: 12,
-            height: 12,
+            width: 8,
+            height: 8,
             borderRadius: "50%",
-            background: `linear-gradient(135deg, ${palette.gradientStart}, ${palette.gradientEnd})`,
-            boxShadow: `0 0 6px rgba(${palette.accentRgb}, 0.7)`,
-            flexShrink: 0,
+            background: palette.accent,
           }}
         />
-        <span
-          style={{
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: "0.02em",
-            background: `linear-gradient(90deg, ${palette.gradientStart}, ${palette.gradientEnd})`,
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
-          }}
-        >
-          {palette.name}
-        </span>
-        <span
-          style={{
-            fontSize: 10,
-            color: "var(--text-muted)",
-            transition: "transform 0.2s",
-            transform: expanded ? "rotate(180deg)" : "none",
-          }}
-        >
-          ▼
-        </span>
+        {palette.name}
+        <ChevronDown size={12} color="var(--text-muted)" />
       </button>
 
-      {/* Dropdown */}
-      {expanded && (
-        <>
-          <div
-            onClick={() => setExpanded(false)}
-            style={{ position: "fixed", inset: 0, zIndex: 40 }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: "calc(100% + 8px)",
-              right: 0,
-              zIndex: 50,
-              background: "var(--bg-card)",
-              border: `1px solid rgba(${palette.accentRgb}, 0.2)`,
-              borderRadius: 16,
-              padding: 8,
-              width: 240,
-              boxShadow: `0 16px 48px rgba(0,0,0,0.4), 0 0 0 1px rgba(${palette.accentRgb}, 0.1)`,
-              animation: "dropIn 0.15s ease",
-            }}
-          >
-            <div
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            right: 0,
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-card)",
+            borderRadius: 10,
+            overflow: "hidden",
+            zIndex: 50,
+            minWidth: 180,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+          }}
+        >
+          {Object.values(PALETTES).map((p) => (
+            <button
+              key={p.id}
+              onClick={() => {
+                setPalette(p.id);
+                setOpen(false);
+              }}
               style={{
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: "var(--text-muted)",
-                padding: "4px 8px 8px",
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "10px 14px",
+                background:
+                  activePalette === p.id
+                    ? "var(--bg-secondary)"
+                    : "transparent",
+                border: "none",
+                cursor: "pointer",
+                textAlign: "left",
+                borderBottom: "1px solid var(--border-card)",
               }}
             >
-              Color Theme
-            </div>
-            {Object.values(PALETTES).map((p) => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  setPalette(p.id);
-                  setExpanded(false);
-                }}
+              <div
                 style={{
-                  width: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "9px 10px",
-                  borderRadius: 10,
-                  border: "none",
-                  cursor: "pointer",
-                  background:
-                    activePalette === p.id
-                      ? `rgba(${p.accentRgb}, 0.12)`
-                      : "transparent",
-                  transition: "all 0.15s",
-                  outline:
-                    activePalette === p.id
-                      ? `1px solid rgba(${p.accentRgb}, 0.3)`
-                      : "1px solid transparent",
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: p.accent,
+                  flexShrink: 0,
                 }}
-                onMouseEnter={(e) => {
-                  if (activePalette !== p.id)
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      `rgba(${p.accentRgb}, 0.06)`;
-                }}
-                onMouseLeave={(e) => {
-                  if (activePalette !== p.id)
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "transparent";
-                }}
-              >
-                {/* Gradient swatch */}
+              />
+              <div>
                 <div
                   style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: 8,
-                    flexShrink: 0,
-                    background: `linear-gradient(135deg, ${p.gradientStart}, ${p.gradientEnd})`,
-                    boxShadow:
-                      activePalette === p.id
-                        ? `0 0 10px rgba(${p.accentRgb}, 0.6)`
-                        : "none",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 14,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--text-primary)",
                   }}
                 >
-                  {p.emoji}
+                  {p.name}
                 </div>
-                <div style={{ textAlign: "left" }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 700,
-                      color:
-                        activePalette === p.id
-                          ? p.accent
-                          : "var(--text-primary)",
-                    }}
-                  >
-                    {p.name}
-                  </div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
-                    {p.description}
-                  </div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                  {p.description}
                 </div>
-                {activePalette === p.id && (
-                  <span
-                    style={{
-                      marginLeft: "auto",
-                      fontSize: 14,
-                      color: p.accent,
-                    }}
-                  >
-                    ✓
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </>
+              </div>
+              {activePalette === p.id && (
+                <span
+                  style={{ marginLeft: "auto", fontSize: 10, color: p.accent }}
+                >
+                  ✓
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
       )}
-      <style jsx global>{`
-        @keyframes dropIn {
-          from {
-            opacity: 0;
-            transform: translateY(-8px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-      `}</style>
     </div>
   );
 }

@@ -494,208 +494,455 @@ export default function StockDetailPanel({
 
       {/* ── Chart Tab ── */}
       {activeTab === "chart" && (
-        <div
-          style={{
-            borderRadius: 12,
-            overflow: "hidden",
-            background: "var(--bg-secondary)",
-            border: "1px solid var(--border-card)",
-            padding: "16px 8px 8px",
-          }}
-        >
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Main BB Chart */}
           <div
             style={{
-              fontSize: 11,
-              fontWeight: 600,
-              color: "var(--text-muted)",
-              marginBottom: 8,
-              paddingLeft: 8,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
+              borderRadius: 12,
+              overflow: "hidden",
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-card)",
+              padding: "16px 8px 8px",
             }}
           >
-            Bollinger Bands · Entry / Target Zones
-          </div>
-          <ResponsiveContainer width="100%" height={320}>
-            <ComposedChart
-              data={chartData}
-              margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: "var(--text-muted)",
+                marginBottom: 8,
+                paddingLeft: 8,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+              }}
             >
-              <defs>
-                <linearGradient id="bbAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop
-                    offset="0%"
-                    stopColor={palette.accentSecondary}
-                    stopOpacity={0.08}
+              Bollinger Bands · Entry / Target Zones
+            </div>
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart
+                data={chartData}
+                margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
+              >
+                <defs>
+                  <linearGradient id="bbAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop
+                      offset="0%"
+                      stopColor={palette.accentSecondary}
+                      stopOpacity={0.08}
+                    />
+                    <stop
+                      offset="100%"
+                      stopColor={palette.accentSecondary}
+                      stopOpacity={0.01}
+                    />
+                  </linearGradient>
+                  <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop
+                      offset="0%"
+                      stopColor={accentColor}
+                      stopOpacity={0.15}
+                    />
+                    <stop
+                      offset="100%"
+                      stopColor={accentColor}
+                      stopOpacity={0}
+                    />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="var(--border-card)"
+                  opacity={0.5}
+                />
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(v) => v.slice(5)}
+                  tick={{ fontSize: 9, fill: "var(--text-muted)" }}
+                  tickLine={false}
+                  axisLine={false}
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  tickFormatter={(v) =>
+                    `₹${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`
+                  }
+                  tick={{ fontSize: 9, fill: "var(--text-muted)" }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={52}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border-card)",
+                    borderRadius: 10,
+                    fontSize: 11,
+                  }}
+                  formatter={(v: any, name: any) => [
+                    `₹${Number(v).toFixed(2)}`,
+                    name,
+                  ]}
+                />
+                {/* BB envelope as area */}
+                <Area
+                  type="monotone"
+                  dataKey="upper2"
+                  stroke={`rgba(${palette.accentSecRgb},0.35)`}
+                  strokeDasharray="4 3"
+                  strokeWidth={1}
+                  fill="none"
+                  name="Upper 2σ"
+                  dot={false}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="lower2"
+                  stroke={`rgba(${palette.accentSecRgb},0.35)`}
+                  strokeDasharray="4 3"
+                  strokeWidth={1}
+                  fill="url(#bbAreaGrad)"
+                  name="Lower 2σ"
+                  dot={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="upper1"
+                  stroke={`rgba(${accentRgb},0.25)`}
+                  strokeWidth={1}
+                  dot={false}
+                  strokeDasharray="2 4"
+                  name="Upper 1σ"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="lower1"
+                  stroke={`rgba(${accentRgb},0.25)`}
+                  strokeWidth={1}
+                  dot={false}
+                  strokeDasharray="2 4"
+                  name="Lower 1σ"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="sma"
+                  stroke={`rgba(${accentRgb},0.6)`}
+                  strokeWidth={1.5}
+                  dot={false}
+                  strokeDasharray="6 3"
+                  name="SMA20"
+                />
+                {/* Price as area */}
+                <Area
+                  type="monotone"
+                  dataKey="close"
+                  stroke={accentColor}
+                  strokeWidth={2.5}
+                  fill="url(#priceGrad)"
+                  dot={false}
+                  name="Close"
+                />
+                {/* Signal dots */}
+                <Line
+                  type="monotone"
+                  dataKey="signal"
+                  stroke="none"
+                  dot={(props: any) => {
+                    if (!props.value) return <g />;
+                    return (
+                      <g key={props.index}>
+                        <circle
+                          cx={props.cx}
+                          cy={props.cy}
+                          r={7}
+                          fill={buyColor}
+                          stroke="var(--bg-card)"
+                          strokeWidth={2}
+                        />
+                        <circle
+                          cx={props.cx}
+                          cy={props.cy}
+                          r={12}
+                          fill="none"
+                          stroke={buyColor}
+                          strokeWidth={1}
+                          opacity={0.4}
+                        />
+                        <circle
+                          cx={props.cx}
+                          cy={props.cy}
+                          r={17}
+                          fill="none"
+                          stroke={buyColor}
+                          strokeWidth={0.5}
+                          opacity={0.2}
+                        />
+                      </g>
+                    );
+                  }}
+                  name="Signal"
+                />
+                <ReferenceLine
+                  y={sig.entryPrice}
+                  stroke={accentColor}
+                  strokeWidth={1.5}
+                  strokeDasharray="8 4"
+                  label={{
+                    value: `Entry ₹${sig.entryPrice.toFixed(0)}`,
+                    fill: accentColor,
+                    fontSize: 9,
+                    position: "insideTopLeft",
+                  }}
+                />
+                <ReferenceLine
+                  y={sig.targetMin}
+                  stroke={buyColor}
+                  strokeDasharray="4 4"
+                  strokeWidth={1}
+                  label={{
+                    value: `T₀ ₹${sig.targetMin.toFixed(0)}`,
+                    fill: buyColor,
+                    fontSize: 9,
+                    position: "insideTopRight",
+                  }}
+                />
+                <ReferenceLine
+                  y={sig.targetMid}
+                  stroke={buyColor}
+                  strokeWidth={2}
+                  strokeDasharray="6 3"
+                  label={{
+                    value: `T₁ ₹${sig.targetMid.toFixed(0)}`,
+                    fill: buyColor,
+                    fontSize: 9,
+                    position: "insideTopRight",
+                  }}
+                />
+                <ReferenceLine
+                  y={sig.targetMax}
+                  stroke={accentColor}
+                  strokeDasharray="4 4"
+                  strokeWidth={1}
+                  label={{
+                    value: `T₂ ₹${sig.targetMax.toFixed(0)}`,
+                    fill: accentColor,
+                    fontSize: 9,
+                    position: "insideTopRight",
+                  }}
+                />
+                <ReferenceLine
+                  y={sig.stopLoss}
+                  stroke={sellColor}
+                  strokeDasharray="4 4"
+                  strokeWidth={1.5}
+                  label={{
+                    value: `SL ₹${sig.stopLoss.toFixed(0)}`,
+                    fill: sellColor,
+                    fontSize: 9,
+                    position: "insideBottomRight",
+                  }}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Volume sub-chart */}
+          <div
+            style={{
+              borderRadius: 12,
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-card)",
+              padding: "12px 8px 4px",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 10,
+                color: "var(--text-muted)",
+                paddingLeft: 8,
+                marginBottom: 4,
+                fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+              }}
+            >
+              Volume
+            </div>
+            <ResponsiveContainer width="100%" height={80}>
+              <BarChart
+                data={chartData}
+                margin={{ top: 0, right: 4, bottom: 0, left: 0 }}
+              >
+                <XAxis dataKey="date" hide />
+                <YAxis
+                  tickFormatter={(v) => `${(v / 1e6).toFixed(0)}M`}
+                  tick={{ fontSize: 8, fill: "var(--text-muted)" }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={36}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border-card)",
+                    borderRadius: 8,
+                    fontSize: 10,
+                  }}
+                  formatter={(v: any) => [
+                    `${(Number(v) / 1e6).toFixed(2)}M`,
+                    "Volume",
+                  ]}
+                />
+                <Bar dataKey="volume" radius={[2, 2, 0, 0]}>
+                  {chartData.map((d, i) => (
+                    <Cell
+                      key={i}
+                      fill={d.signal ? buyColor : `rgba(${accentRgb},0.35)`}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Legend */}
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              flexWrap: "wrap",
+              padding: "8px 4px",
+            }}
+          >
+            {[
+              { color: accentColor, label: "Price", dash: false },
+              {
+                color: `rgba(${palette.accentSecRgb},0.6)`,
+                label: "BB ±2σ",
+                dash: true,
+              },
+              { color: `rgba(${accentRgb},0.5)`, label: "SMA20", dash: true },
+              { color: buyColor, label: "Signal", dot: true },
+              { color: buyColor, label: "Targets", dash: true },
+              { color: sellColor, label: "Stop Loss", dash: true },
+            ].map((item: any) => (
+              <div
+                key={item.label}
+                style={{ display: "flex", alignItems: "center", gap: 5 }}
+              >
+                {item.dot ? (
+                  <div
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: item.color,
+                      boxShadow: `0 0 4px ${item.color}`,
+                    }}
                   />
-                  <stop
-                    offset="100%"
-                    stopColor={palette.accentSecondary}
-                    stopOpacity={0.01}
+                ) : (
+                  <div
+                    style={{
+                      width: 16,
+                      height: 2,
+                      background: item.color,
+                      borderTop: item.dash
+                        ? `2px dashed ${item.color}`
+                        : "none",
+                      opacity: item.dash ? 0.8 : 1,
+                    }}
                   />
-                </linearGradient>
-              </defs>
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="var(--border-card)"
-                opacity={0.5}
-              />
-              <XAxis
-                dataKey="date"
-                tickFormatter={(v) => v.slice(5)}
-                tick={{ fontSize: 9, fill: "var(--text-muted)" }}
-                tickLine={false}
-                axisLine={false}
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                tickFormatter={(v) =>
-                  `₹${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`
-                }
-                tick={{ fontSize: 9, fill: "var(--text-muted)" }}
-                tickLine={false}
-                axisLine={false}
-                width={52}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border-card)",
+                )}
+                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                  {item.label}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Key stats row */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(5, 1fr)",
+              gap: 8,
+            }}
+          >
+            {[
+              {
+                label: "Bandwidth",
+                value: `${(sig.bandwidth * 100).toFixed(1)}%`,
+                desc: sig.bandwidth < 0.05 ? "Squeeze" : "Normal",
+              },
+              {
+                label: "%B Position",
+                value: `${(sig.percentB * 100).toFixed(0)}%`,
+                desc:
+                  sig.percentB < 0.2
+                    ? "Near Lower"
+                    : sig.percentB > 0.8
+                      ? "Near Upper"
+                      : "Mid-Band",
+              },
+              {
+                label: "Risk:Reward",
+                value: `${sig.riskRewardRatio}x`,
+                desc: sig.riskRewardRatio >= 2 ? "Favorable" : "Moderate",
+              },
+              {
+                label: "Confidence",
+                value: `${sig.confidence}%`,
+                desc: sig.confidence >= 80 ? "High" : "Medium",
+              },
+              {
+                label: "Signal Age",
+                value: data.allSignals.indexOf(sig) >= 0 ? sig.date : "—",
+                desc: "Signal date",
+              },
+            ].map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  padding: "10px 12px",
                   borderRadius: 10,
-                  fontSize: 11,
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-card)",
+                  textAlign: "center",
                 }}
-                formatter={(v: any, name: string) => [
-                  `₹${Number(v).toFixed(2)}`,
-                  name,
-                ]}
-              />
-              {/* BB Bands */}
-              <Area
-                type="monotone"
-                dataKey="upper2"
-                stroke={`rgba(${palette.accentSecRgb}, 0.4)`}
-                strokeDasharray="4 3"
-                strokeWidth={1}
-                fill="none"
-                name="Upper 2σ"
-                dot={false}
-              />
-              <Area
-                type="monotone"
-                dataKey="lower2"
-                stroke={`rgba(${palette.accentSecRgb}, 0.4)`}
-                strokeDasharray="4 3"
-                strokeWidth={1}
-                fill="url(#bbAreaGrad)"
-                name="Lower 2σ"
-                dot={false}
-              />
-              <Line
-                type="monotone"
-                dataKey="sma"
-                stroke={`rgba(${accentRgb}, 0.5)`}
-                strokeWidth={1}
-                dot={false}
-                strokeDasharray="6 3"
-                name="SMA20"
-              />
-              <Line
-                type="monotone"
-                dataKey="upper1"
-                stroke={`rgba(${accentRgb}, 0.3)`}
-                strokeWidth={1}
-                dot={false}
-                strokeDasharray="2 4"
-                name="Upper 1σ"
-              />
-              <Line
-                type="monotone"
-                dataKey="lower1"
-                stroke={`rgba(${accentRgb}, 0.3)`}
-                strokeWidth={1}
-                dot={false}
-                strokeDasharray="2 4"
-                name="Lower 1σ"
-              />
-              {/* Price line */}
-              <Line
-                type="monotone"
-                dataKey="close"
-                stroke={accentColor}
-                strokeWidth={2}
-                dot={false}
-                name="Close"
-              />
-              {/* Signal dots */}
-              <Line
-                type="monotone"
-                dataKey="signal"
-                stroke="none"
-                dot={(props: any) => {
-                  if (!props.value) return <g />;
-                  return (
-                    <g key={props.index}>
-                      <circle
-                        cx={props.cx}
-                        cy={props.cy}
-                        r={6}
-                        fill={buyColor}
-                        stroke="var(--bg-card)"
-                        strokeWidth={2}
-                      />
-                      <circle
-                        cx={props.cx}
-                        cy={props.cy}
-                        r={10}
-                        fill="none"
-                        stroke={buyColor}
-                        strokeWidth={1}
-                        opacity={0.5}
-                      />
-                    </g>
-                  );
-                }}
-                name="Signal"
-              />
-              {/* Target reference lines */}
-              <ReferenceLine
-                y={sig.targetMid}
-                stroke={buyColor}
-                strokeDasharray="6 3"
-                strokeWidth={1.5}
-                label={{
-                  value: `T₁ ₹${sig.targetMid.toFixed(0)}`,
-                  fill: buyColor,
-                  fontSize: 9,
-                  position: "insideTopRight",
-                }}
-              />
-              <ReferenceLine
-                y={sig.targetMax}
-                stroke={accentColor}
-                strokeDasharray="4 4"
-                strokeWidth={1}
-                label={{
-                  value: `T₂ ₹${sig.targetMax.toFixed(0)}`,
-                  fill: accentColor,
-                  fontSize: 9,
-                  position: "insideTopRight",
-                }}
-              />
-              <ReferenceLine
-                y={sig.stopLoss}
-                stroke={sellColor}
-                strokeDasharray="4 4"
-                strokeWidth={1}
-                label={{
-                  value: `SL ₹${sig.stopLoss.toFixed(0)}`,
-                  fill: sellColor,
-                  fontSize: 9,
-                  position: "insideBottomRight",
-                }}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+              >
+                <div
+                  style={{
+                    fontSize: 9,
+                    color: "var(--text-muted)",
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                    marginBottom: 4,
+                  }}
+                >
+                  {item.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 800,
+                    fontFamily: "JetBrains Mono",
+                    color: accentColor,
+                  }}
+                >
+                  {item.value}
+                </div>
+                <div
+                  style={{
+                    fontSize: 9,
+                    color: "var(--text-muted)",
+                    marginTop: 2,
+                  }}
+                >
+                  {item.desc}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

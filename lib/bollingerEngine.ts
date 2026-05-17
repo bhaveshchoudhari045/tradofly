@@ -380,30 +380,31 @@ export function filterByPeriod(
 export function splitLiveSignals(
   signals: SignalMatch[],
   bbData: BBResult[],
-): {
-  confirmed: SignalMatch[];
-  approaching: SignalMatch[];
-} {
-  const today = new Date().toISOString().split("T")[0];
-  const confirmed = signals.filter((s) => s.date === today);
+): { confirmed: SignalMatch[]; approaching: SignalMatch[] } {
+  // Confirmed = signals from last 3 trading days
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 3);
+  const cutoffStr = cutoff.toISOString().split("T")[0];
+  const confirmed = signals.filter((s) => s.date >= cutoffStr);
 
-  // "Approaching": latest bar is within 5% of lower band OR percentB < 0.2
+  // Approaching = latest bar near lower band but no confirmed signal
   const latestBB = bbData[bbData.length - 1];
   const approaching: SignalMatch[] = [];
-  if (latestBB && latestBB.sma > 0) {
+
+  if (latestBB?.sma > 0) {
     const pctB = latestBB.percentB;
-    if (pctB < 0.2 && confirmed.length === 0) {
-      // Synthesise a "pending" approaching signal
+    if (pctB < 0.3 && confirmed.length === 0) {
       const targets = calcTargets(latestBB, latestBB.close);
+      const today = new Date().toISOString().split("T")[0];
       approaching.push({
         date: today,
         index: bbData.length - 1,
         type: "SINGLE_DAY",
         direction: "BUY",
-        confidence: Math.round(40 + (0.2 - pctB) * 200), // scale 40-80
+        confidence: Math.round(40 + (0.3 - pctB) * 200),
         entryPrice: latestBB.close,
         ...targets,
-        conditionDesc: `Price approaching lower band (${(pctB * 100).toFixed(1)}%B) — setup forming`,
+        conditionDesc: `Price approaching lower band — %B at ${(pctB * 100).toFixed(1)}%, setup forming`,
       });
     }
   }

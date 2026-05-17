@@ -82,7 +82,9 @@ export default function RecommendedPage() {
         5 * 60 * 1000,
       );
     }
-    return () => clearInterval(refreshTimer.current);
+    return () => {
+      if (refreshTimer.current !== null) clearInterval(refreshTimer.current);
+    };
   }, [mode, period, fetchData]);
 
   // Apply filters + sort
@@ -142,7 +144,16 @@ export default function RecommendedPage() {
     : "0";
 
   return (
-    <div style={{ position: "relative", minHeight: "100vh" }}>
+    <div
+      style={{
+        position: "relative",
+        minHeight: "100vh",
+        padding: "24px 32px",
+        maxWidth: 1400,
+        margin: "0 auto",
+      }}
+    >
+      {" "}
       {/* ── Particle / atmospheric bg ── */}
       <div
         style={{
@@ -161,7 +172,6 @@ export default function RecommendedPage() {
           }}
         />
       </div>
-
       <div style={{ position: "relative", zIndex: 1 }}>
         {/* ── Page header ── */}
         <div style={{ marginBottom: 28 }}>
@@ -205,9 +215,7 @@ export default function RecommendedPage() {
                     fontFamily: "Syne, sans-serif",
                     fontSize: 28,
                     fontWeight: 900,
-                    background: `linear-gradient(135deg, ${palette.gradientStart} 0%, ${palette.gradientEnd} 100%)`,
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
+                    color: "var(--text-primary)",
                   }}
                 >
                   Recommended
@@ -841,7 +849,6 @@ export default function RecommendedPage() {
           delayed). Targets are estimated from band geometry.
         </div>
       </div>
-
       {/* ── Stock detail overlay ── */}
       {selectedSymbol && (
         <StockDetailPanel
@@ -849,7 +856,6 @@ export default function RecommendedPage() {
           onClose={() => setSelectedSymbol(null)}
         />
       )}
-
       <style jsx global>{`
         @keyframes spin {
           to {
