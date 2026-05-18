@@ -1,4 +1,8 @@
 "use client";
+// components/charts/StockChart.tsx
+// True OHLC candlestick chart using Recharts + custom SVG candle renderer.
+// Includes live price polling, BB overlay, volume, RSI sub-chart.
+
 import {
   ComposedChart,
   Line,
@@ -8,262 +12,102 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceLine,
   Area,
   Cell,
 } from "recharts";
-import type { HistoricalData } from "@/types";
-import { useMemo, useState } from "react";
+import type { HistoricalData } from "@/lib/technicals";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { useRealtimeQuote } from "@/hooks/useRealTimeQuotes";
+import { RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
 
 interface StockChartProps {
   data: HistoricalData[];
   symbol: string;
   height?: number;
+  showLivePrice?: boolean;
 }
 
-type ChartType = "line" | "area" | "candle";
-type Indicator = "ma20" | "ma50" | "ma200" | "bb" | "volume";
+type ChartType = "candle" | "line" | "area";
+type Indicator =
+  | "ma20"
+  | "ma50"
+  | "ma200"
+  | "bb"
+  | "ema"
+  | "vwap"
+  | "volume"
+  | "rsi"
+  | "macd";
+type Range = "1W" | "1M" | "3M" | "6M" | "1Y" | "2Y" | "ALL";
 
-// ── Custom Candlestick Bar ─────────────────────────────────────────────────
+// ── Custom candlestick renderer ───────────────────────────────────────────────
 const CandlestickBar = (props: any) => {
-  const { x, y, width, height, payload } = props;
+  const { x, y, width, height, payload, chartHeight } = props;
   if (!payload) return null;
-
-  const { open, close, high, low } = payload;
-  const isUp = close >= open;
-  const color = isUp ? "#4ADE80" : "#F87171";
-
-  // We need to calculate positions from the chart's coordinate system
-  // x, y, width, height come from recharts Bar positioning
-  // But for candles we need to use the yAxis scale
-  // This is handled via the custom shape approach
-  return null; // placeholder — real candles drawn via CustomCandlestick
-};
-
-// Real SVG candlestick renderer
-const CustomCandlestick = ({ x, width, yAxis, payload }: any) => {
-  if (!payload || !yAxis) return null;
-  const { open, close, high, low } = payload;
+  const { open, high, low, close } = payload;
   if (!open || !close || !high || !low) return null;
 
   const isUp = close >= open;
-  const color = isUp ? "#4ADE80" : "#F87171";
-  const fillColor = isUp ? "#4ADE80" : "#F87171";
+  const fill = isUp
+    ? "var(--candle-up, #22C55E)"
+    : "var(--candle-down, #EF4444)";
+  const stroke = isUp
+    ? "var(--candle-up, #22C55E)"
+    : "var(--candle-down, #EF4444)";
 
-  const toY = (val: number) => {
-    if (!yAxis || typeof yAxis.scale !== "function") return 0;
-    return yAxis.scale(val);
-  };
-
-  const bodyTop = toY(Math.max(open, close));
-  const bodyBottom = toY(Math.min(open, close));
-  const bodyHeight = Math.max(1, bodyBottom - bodyTop);
-  const wickX = x + width / 2;
-  const candleWidth = Math.max(2, width * 0.7);
-  const candleX = x + (width - candleWidth) / 2;
+  // We need to work in chart coordinates — this is called from a custom shape
+  // The `y` and `height` from recharts are for the bar, we need the candlestick geometry
+  const bodyTop = Math.min(y ?? 0, (y ?? 0) + (height ?? 0));
+  const bodyBot = Math.max(y ?? 0, (y ?? 0) + (height ?? 0));
+  const bodyH = Math.max(1, Math.abs(height ?? 1));
+  const cx = (x ?? 0) + (width ?? 6) / 2;
+  const wickW = Math.max(1, (width ?? 6) * 0.12);
 
   return (
     <g>
-      {/* High-Low wick */}
+      {/* Upper wick */}
       <line
-        x1={wickX}
-        y1={toY(high)}
-        x2={wickX}
-        y2={toY(low)}
-        stroke={color}
-        strokeWidth={1}
+        x1={cx}
+        y1={bodyTop}
+        x2={cx}
+        y2={y}
+        stroke={stroke}
+        strokeWidth={wickW}
       />
-      {/* Open-Close body */}
+      {/* Body */}
       <rect
-        x={candleX}
+        x={x}
         y={bodyTop}
-        width={candleWidth}
-        height={bodyHeight}
-        fill={isUp ? fillColor : fillColor}
-        stroke={color}
+        width={width}
+        height={bodyH}
+        fill={fill}
+        stroke={stroke}
         strokeWidth={0.5}
-        opacity={isUp ? 0.85 : 0.85}
+        rx={1}
+      />
+      {/* Lower wick */}
+      <line
+        x1={cx}
+        y1={bodyBot}
+        x2={cx}
+        y2={(y ?? 0) + (height ?? 0)}
+        stroke={stroke}
+        strokeWidth={wickW}
       />
     </g>
   );
 };
 
-// Candlestick chart using SVG overlay on top of recharts
-const CandleChart = ({
-  data,
-  height,
-  yMin,
-  yMax,
-  indicators,
-}: {
-  data: HistoricalData[];
-  height: number;
-  yMin: number;
-  yMax: number;
-  indicators: Set<Indicator>;
-}) => {
-  const MARGIN = { top: 4, right: 4, bottom: 30, left: 60 };
-
-  return (
-    <div style={{ position: "relative", width: "100%", height }}>
-      <ResponsiveContainer width="100%" height={height}>
-        <ComposedChart data={data} margin={MARGIN}>
-          <CartesianGrid
-            strokeDasharray="3 3"
-            stroke="var(--border-card)"
-            strokeOpacity={0.5}
-          />
-          <XAxis
-            dataKey="date"
-            tickFormatter={(v) => {
-              const d = new Date(v);
-              return `${d.toLocaleString("en", { month: "short" })} '${d.getFullYear().toString().slice(2)}`;
-            }}
-            tick={{ fontSize: 10, fill: "var(--text-muted)" }}
-            tickLine={false}
-            axisLine={{ stroke: "var(--border-card)" }}
-            interval="preserveStartEnd"
-          />
-          <YAxis
-            domain={[yMin, yMax]}
-            tickFormatter={(v) =>
-              `₹${v >= 1000 ? (v / 1000).toFixed(1) + "k" : v}`
-            }
-            tick={{ fontSize: 10, fill: "var(--text-muted)" }}
-            tickLine={false}
-            axisLine={false}
-            width={60}
-          />
-          <Tooltip
-            content={<CustomTooltip />}
-            cursor={{
-              stroke: "var(--border-primary)",
-              strokeWidth: 1,
-              strokeDasharray: "4 4",
-            }}
-          />
-
-          {/* Bollinger Bands */}
-          {indicators.has("bb") && (
-            <>
-              <Line
-                dataKey="upperBand"
-                stroke="#A78BFA"
-                strokeWidth={1}
-                dot={false}
-                strokeDasharray="4 3"
-                name="BB Upper"
-              />
-              <Line
-                dataKey="lowerBand"
-                stroke="#A78BFA"
-                strokeWidth={1}
-                dot={false}
-                strokeDasharray="4 3"
-                name="BB Lower"
-              />
-              <Line
-                dataKey="upperBand1"
-                stroke="#8B5CF6"
-                strokeWidth={1}
-                dot={false}
-                strokeDasharray="2 3"
-                name="BB 1σ Upper"
-              />
-              <Line
-                dataKey="lowerBand1"
-                stroke="#8B5CF6"
-                strokeWidth={1}
-                dot={false}
-                strokeDasharray="2 3"
-                name="BB 1σ Lower"
-              />
-            </>
-          )}
-
-          {/* Moving Averages */}
-          {indicators.has("ma20") && (
-            <Line
-              dataKey="ma20"
-              stroke="#F59E0B"
-              strokeWidth={1.5}
-              dot={false}
-              name="MA20"
-            />
-          )}
-          {indicators.has("ma50") && (
-            <Line
-              dataKey="ma50"
-              stroke="#3B82F6"
-              strokeWidth={1.5}
-              dot={false}
-              name="MA50"
-            />
-          )}
-          {indicators.has("ma200") && (
-            <Line
-              dataKey="ma200"
-              stroke="#EC4899"
-              strokeWidth={1.5}
-              dot={false}
-              name="MA200"
-            />
-          )}
-
-          {/* Invisible bar to get position data for candles */}
-          <Bar
-            dataKey="high"
-            fill="transparent"
-            stroke="transparent"
-            shape={(props: any) => {
-              const { x, width, yAxis, payload } = props;
-              if (!payload || !yAxis?.scale) return <g />;
-              const { open, close, high: h, low: l } = payload;
-              if (!open || !close || !h || !l) return <g />;
-              const isUp = close >= open;
-              const color = isUp ? "#4ADE80" : "#F87171";
-              const toY = (val: number) => yAxis.scale(val);
-              const bodyTop = toY(Math.max(open, close));
-              const bodyBottom = toY(Math.min(open, close));
-              const bodyH = Math.max(1, bodyBottom - bodyTop);
-              const wickX = x + width / 2;
-              const cw = Math.max(2, width * 0.75);
-              const cx = x + (width - cw) / 2;
-              return (
-                <g key={`candle-${x}`}>
-                  <line
-                    x1={wickX}
-                    y1={toY(h)}
-                    x2={wickX}
-                    y2={toY(l)}
-                    stroke={color}
-                    strokeWidth={1}
-                  />
-                  <rect
-                    x={cx}
-                    y={bodyTop}
-                    width={cw}
-                    height={bodyH}
-                    fill={isUp ? color : color}
-                    stroke={color}
-                    strokeWidth={0.5}
-                    opacity={0.9}
-                  />
-                </g>
-              );
-            }}
-          />
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>
-  );
-};
-
-// ── Custom Tooltip ─────────────────────────────────────────────────────────
-const CustomTooltip = ({ active, payload }: any) => {
-  if (!active || !payload || !payload.length) return null;
+// ── Custom tooltip ─────────────────────────────────────────────────────────────
+const OHLCTooltip = ({ active, payload, label }: any) => {
+  if (!active || !payload?.length) return null;
   const d = payload[0]?.payload;
   if (!d) return null;
   const isUp = d.close >= d.open;
+  const chg = d.close - d.open;
+  const chgPct = d.open > 0 ? (chg / d.open) * 100 : 0;
+
   return (
     <div
       style={{
@@ -271,17 +115,17 @@ const CustomTooltip = ({ active, payload }: any) => {
         border: "1px solid var(--border-card)",
         borderRadius: 10,
         padding: "10px 14px",
-        boxShadow: "var(--shadow-lg)",
         fontSize: 12,
-        minWidth: 170,
+        boxShadow: "var(--shadow-lg)",
+        minWidth: 180,
       }}
     >
       <div
         style={{
           fontWeight: 700,
+          color: "var(--text-muted)",
+          fontSize: 10,
           marginBottom: 6,
-          color: "var(--text-secondary)",
-          fontSize: 11,
         }}
       >
         {d.date}
@@ -290,104 +134,115 @@ const CustomTooltip = ({ active, payload }: any) => {
         style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr",
-          gap: "3px 12px",
+          rowGap: 3,
+          columnGap: 12,
         }}
       >
-        <span style={{ color: "var(--text-muted)" }}>Open</span>
-        <span style={{ fontFamily: "JetBrains Mono", fontWeight: 600 }}>
-          ₹{d.open?.toFixed(2)}
-        </span>
-        <span style={{ color: "var(--text-muted)" }}>High</span>
-        <span
-          style={{
-            fontFamily: "JetBrains Mono",
-            fontWeight: 600,
-            color: "var(--accent-green)",
-          }}
-        >
-          ₹{d.high?.toFixed(2)}
-        </span>
-        <span style={{ color: "var(--text-muted)" }}>Low</span>
-        <span
-          style={{
-            fontFamily: "JetBrains Mono",
-            fontWeight: 600,
-            color: "var(--accent-red)",
-          }}
-        >
-          ₹{d.low?.toFixed(2)}
-        </span>
-        <span style={{ color: "var(--text-muted)" }}>Close</span>
-        <span
-          style={{
-            fontFamily: "JetBrains Mono",
-            fontWeight: 600,
-            color: isUp ? "var(--accent-green)" : "var(--accent-red)",
-          }}
-        >
-          ₹{d.close?.toFixed(2)}
-        </span>
-        {d.volume && (
-          <>
-            <span style={{ color: "var(--text-muted)" }}>Vol</span>
-            <span style={{ fontFamily: "JetBrains Mono", fontWeight: 600 }}>
-              {(d.volume / 1e6).toFixed(2)}M
+        {[
+          ["O", d.open],
+          ["H", d.high],
+          ["L", d.low],
+          ["C", d.close],
+        ].map(([lbl, val]) => (
+          <span
+            key={lbl as string}
+            style={{ display: "flex", gap: 4, alignItems: "center" }}
+          >
+            <span
+              style={{
+                fontSize: 9,
+                color: "var(--text-muted)",
+                fontWeight: 700,
+                width: 10,
+              }}
+            >
+              {lbl}
             </span>
-          </>
-        )}
-        {d.rsi && (
-          <>
-            <span style={{ color: "var(--text-muted)" }}>RSI</span>
             <span
               style={{
                 fontFamily: "JetBrains Mono",
                 fontWeight: 600,
                 color:
-                  d.rsi > 70
-                    ? "var(--accent-red)"
-                    : d.rsi < 30
-                      ? "var(--accent-green)"
-                      : "var(--text-primary)",
+                  lbl === "H"
+                    ? "#4ADE80"
+                    : lbl === "L"
+                      ? "#F87171"
+                      : lbl === "C"
+                        ? isUp
+                          ? "#4ADE80"
+                          : "#F87171"
+                        : "var(--text-primary)",
               }}
             >
-              {d.rsi.toFixed(1)}
+              ₹{Number(val).toFixed(2)}
             </span>
-          </>
-        )}
-        {d.ma20 && (
-          <>
-            <span style={{ color: "var(--text-muted)" }}>MA20</span>
-            <span
-              style={{
-                fontFamily: "JetBrains Mono",
-                fontWeight: 600,
-                color: "#F59E0B",
-              }}
-            >
-              ₹{d.ma20?.toFixed(2)}
-            </span>
-          </>
-        )}
+          </span>
+        ))}
       </div>
+      <div
+        style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}
+      >
+        <span
+          style={{
+            fontSize: 11,
+            fontFamily: "JetBrains Mono",
+            color: isUp ? "#4ADE80" : "#F87171",
+            fontWeight: 700,
+          }}
+        >
+          {isUp ? "+" : ""}
+          {chg.toFixed(2)} ({chgPct.toFixed(2)}%)
+        </span>
+      </div>
+      {d.volume > 0 && (
+        <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 3 }}>
+          Vol: {(d.volume / 1e6).toFixed(2)}M
+        </div>
+      )}
+      {d.rsi !== undefined && (
+        <div
+          style={{
+            fontSize: 10,
+            color:
+              d.rsi > 70
+                ? "#F87171"
+                : d.rsi < 30
+                  ? "#4ADE80"
+                  : "var(--text-muted)",
+            marginTop: 2,
+          }}
+        >
+          RSI: {d.rsi.toFixed(1)}
+        </div>
+      )}
     </div>
   );
 };
 
-// ── Main Chart Component ───────────────────────────────────────────────────
 export default function StockChart({
   data,
   symbol,
-  height = 400,
+  height = 420,
+  showLivePrice = true,
 }: StockChartProps) {
   const [chartType, setChartType] = useState<ChartType>("candle");
   const [indicators, setIndicators] = useState<Set<Indicator>>(
-    new Set(["ma20", "volume"]),
+    new Set(["ma20", "bb", "volume"]),
   );
-  const [range, setRange] = useState<"1M" | "3M" | "6M" | "1Y" | "2Y" | "ALL">(
-    "6M",
+  const [subChart, setSubChart] = useState<"volume" | "rsi" | "macd" | "none">(
+    "volume",
   );
+  const [range, setRange] = useState<Range>("3M");
 
-  const ranges = {
+  // Live price poll
+  const {
+    quote: liveQuote,
+    loading: liveLoading,
+    lastFetchedAt,
+  } = useRealtimeQuote(showLivePrice ? symbol : null, 30_000);
+
+  const ranges: Record<Range, number> = {
+    "1W": 7,
     "1M": 22,
     "3M": 66,
     "6M": 130,
@@ -396,7 +251,27 @@ export default function StockChart({
     ALL: 9999,
   };
 
-  const filteredData = useMemo(() => data.slice(-ranges[range]), [data, range]);
+  const slicedData = useMemo(() => {
+    const count = ranges[range];
+    const sliced = data.slice(-count);
+    // Patch the last bar with live price if available
+    if (liveQuote && sliced.length > 0) {
+      const last = { ...sliced[sliced.length - 1] };
+      last.close = liveQuote.price || last.close;
+      last.high = Math.max(
+        last.high,
+        liveQuote.high || last.high,
+        liveQuote.price || last.high,
+      );
+      last.low = Math.min(
+        last.low,
+        liveQuote.low || last.low,
+        liveQuote.price || last.low,
+      );
+      return [...sliced.slice(0, -1), last];
+    }
+    return sliced;
+  }, [data, range, liveQuote]);
 
   function toggleIndicator(ind: Indicator) {
     setIndicators((prev) => {
@@ -406,25 +281,36 @@ export default function StockChart({
     });
   }
 
-  const firstClose = filteredData[0]?.close ?? 0;
-  const lastClose = filteredData[filteredData.length - 1]?.close ?? 0;
-  const isUp = lastClose >= firstClose;
-  const lineColorVal = isUp ? "#4ADE80" : "#F87171";
+  const lastClose = slicedData[slicedData.length - 1]?.close ?? 0;
+  const firstClose = slicedData[0]?.close ?? 0;
+  const periodChange =
+    firstClose > 0 ? ((lastClose - firstClose) / firstClose) * 100 : 0;
+  const isUp = periodChange >= 0;
+  const candleUpColor = "#22C55E";
+  const candleDownColor = "#EF4444";
+  const priceColor = isUp ? candleUpColor : candleDownColor;
 
-  const yMin = useMemo(() => {
-    const prices = filteredData.map((d) => d.low).filter(Boolean) as number[];
-    return prices.length ? Math.floor(Math.min(...prices) * 0.98) : 0;
-  }, [filteredData]);
+  const yDomain = useMemo(() => {
+    const lows = slicedData
+      .map((d) => d.lowerBand ?? d.low ?? d.close)
+      .filter((v) => v > 0);
+    const highs = slicedData
+      .map((d) => d.upperBand ?? d.high ?? d.close)
+      .filter((v) => v > 0);
+    if (!lows.length || !highs.length) return ["auto", "auto"];
+    return [
+      Math.floor(Math.min(...lows) * 0.975),
+      Math.ceil(Math.max(...highs) * 1.025),
+    ];
+  }, [slicedData]);
 
-  const yMax = useMemo(() => {
-    const prices = filteredData.map((d) => d.high).filter(Boolean) as number[];
-    return prices.length ? Math.ceil(Math.max(...prices) * 1.02) : 100;
-  }, [filteredData]);
+  const mainH = subChart !== "none" ? height * 0.65 : height;
+  const subH = height * 0.3;
 
-  const btnStyle = (active: boolean) => ({
-    padding: "4px 10px",
+  const btnStyle = (active: boolean, small = false) => ({
+    padding: small ? "3px 7px" : "4px 10px",
     borderRadius: 6,
-    fontSize: 11,
+    fontSize: small ? 10 : 11,
     fontWeight: 600,
     cursor: "pointer",
     border: "1px solid",
@@ -434,23 +320,91 @@ export default function StockChart({
     transition: "all 0.15s",
   });
 
-  const mainHeight = indicators.has("volume") ? height * 0.72 : height;
-
   return (
     <div>
-      {/* ── Controls ── */}
+      {/* ── Live price badge ── */}
+      {showLivePrice && liveQuote && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span className="live-dot" />
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                color: "var(--accent-green)",
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+              }}
+            >
+              Live
+            </span>
+          </div>
+          <span
+            style={{
+              fontSize: 22,
+              fontWeight: 800,
+              fontFamily: "JetBrains Mono, monospace",
+              color: "var(--text-primary)",
+            }}
+          >
+            ₹
+            {liveQuote.price.toLocaleString("en-IN", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </span>
+          <span
+            className={liveQuote.changePercent >= 0 ? "price-up" : "price-down"}
+            style={{ display: "flex", alignItems: "center", gap: 3 }}
+          >
+            {liveQuote.changePercent >= 0 ? (
+              <TrendingUp size={10} />
+            ) : (
+              <TrendingDown size={10} />
+            )}
+            {liveQuote.changePercent >= 0 ? "+" : ""}
+            {liveQuote.changePercent.toFixed(2)}%
+          </span>
+          {lastFetchedAt && (
+            <span
+              style={{
+                fontSize: 10,
+                color: "var(--text-muted)",
+                marginLeft: "auto",
+              }}
+            >
+              Updated{" "}
+              {lastFetchedAt.toLocaleTimeString("en-IN", {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* ── Toolbar ── */}
       <div
         style={{
           display: "flex",
-          gap: 8,
+          gap: 6,
           flexWrap: "wrap",
-          marginBottom: 16,
+          marginBottom: 12,
           alignItems: "center",
         }}
       >
         {/* Range */}
-        <div style={{ display: "flex", gap: 4, marginRight: 4 }}>
-          {(["1M", "3M", "6M", "1Y", "2Y", "ALL"] as const).map((r) => (
+        <div style={{ display: "flex", gap: 3 }}>
+          {(["1W", "1M", "3M", "6M", "1Y", "2Y", "ALL"] as Range[]).map((r) => (
             <button
               key={r}
               style={btnStyle(range === r)}
@@ -460,224 +414,346 @@ export default function StockChart({
             </button>
           ))}
         </div>
+
         <div
           style={{
             width: 1,
             height: 20,
             background: "var(--border-card)",
-            margin: "0 4px",
+            flexShrink: 0,
           }}
         />
+
         {/* Chart type */}
-        <div style={{ display: "flex", gap: 4 }}>
-          {(
-            [
-              { id: "candle", label: "🕯 Candle" },
-              { id: "area", label: "◬ Area" },
-              { id: "line", label: "— Line" },
-            ] as { id: ChartType; label: string }[]
-          ).map(({ id, label }) => (
+        <div style={{ display: "flex", gap: 3 }}>
+          {(["candle", "line", "area"] as ChartType[]).map((t) => (
             <button
-              key={id}
-              style={btnStyle(chartType === id)}
-              onClick={() => setChartType(id)}
+              key={t}
+              style={btnStyle(chartType === t)}
+              onClick={() => setChartType(t)}
             >
-              {label}
+              {t === "candle" ? "📊" : t === "line" ? "📉" : "📈"}{" "}
+              {t[0].toUpperCase() + t.slice(1)}
             </button>
           ))}
         </div>
+
         <div
           style={{
             width: 1,
             height: 20,
             background: "var(--border-card)",
-            margin: "0 4px",
+            flexShrink: 0,
           }}
         />
-        {/* Indicators */}
-        {(["ma20", "ma50", "ma200", "bb", "volume"] as Indicator[]).map(
+
+        {/* Overlays */}
+        {(["ma20", "ma50", "ma200", "bb", "ema", "vwap"] as Indicator[]).map(
           (ind) => (
             <button
               key={ind}
-              style={btnStyle(indicators.has(ind))}
+              style={btnStyle(indicators.has(ind), true)}
               onClick={() => toggleIndicator(ind)}
             >
-              {ind === "ma20"
-                ? "MA20"
-                : ind === "ma50"
-                  ? "MA50"
-                  : ind === "ma200"
-                    ? "MA200"
-                    : ind === "bb"
-                      ? "BB"
-                      : "Vol"}
+              {ind.toUpperCase()}
             </button>
           ),
         )}
+
+        <div
+          style={{
+            width: 1,
+            height: 20,
+            background: "var(--border-card)",
+            flexShrink: 0,
+          }}
+        />
+
+        {/* Sub-chart */}
+        {(["volume", "rsi", "macd", "none"] as const).map((s) => (
+          <button
+            key={s}
+            style={btnStyle(subChart === s, true)}
+            onClick={() => setSubChart(s)}
+          >
+            {s === "none" ? "—" : s.toUpperCase()}
+          </button>
+        ))}
+
+        {/* Period change indicator */}
+        <span
+          className={isUp ? "price-up" : "price-down"}
+          style={{
+            marginLeft: "auto",
+            display: "flex",
+            alignItems: "center",
+            gap: 3,
+          }}
+        >
+          {isUp ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+          {isUp ? "+" : ""}
+          {periodChange.toFixed(2)}% ({range})
+        </span>
       </div>
 
-      {/* ── Candle Chart ── */}
-      {chartType === "candle" && (
-        <CandleChart
-          data={filteredData}
-          height={mainHeight}
-          yMin={yMin}
-          yMax={yMax}
-          indicators={indicators}
-        />
-      )}
+      {/* ── Main price chart ── */}
+      <ResponsiveContainer width="100%" height={mainH}>
+        <ComposedChart
+          data={slicedData}
+          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+        >
+          <defs>
+            <linearGradient id="gradUp" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={candleUpColor} stopOpacity={0.15} />
+              <stop offset="95%" stopColor={candleUpColor} stopOpacity={0.01} />
+            </linearGradient>
+            <linearGradient id="gradDown" x1="0" y1="0" x2="0" y2="1">
+              <stop
+                offset="5%"
+                stopColor={candleDownColor}
+                stopOpacity={0.15}
+              />
+              <stop
+                offset="95%"
+                stopColor={candleDownColor}
+                stopOpacity={0.01}
+              />
+            </linearGradient>
+          </defs>
 
-      {/* ── Area / Line Chart ── */}
-      {(chartType === "area" || chartType === "line") && (
-        <ResponsiveContainer width="100%" height={mainHeight}>
-          <ComposedChart
-            data={filteredData}
-            margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
-          >
-            <defs>
-              <linearGradient id="colorClose" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={lineColorVal} stopOpacity={0.18} />
-                <stop
-                  offset="95%"
-                  stopColor={lineColorVal}
-                  stopOpacity={0.01}
-                />
-              </linearGradient>
-            </defs>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="var(--border-card)"
-              strokeOpacity={0.5}
-            />
-            <XAxis
-              dataKey="date"
-              tickFormatter={(v) => {
-                const d = new Date(v);
-                return `${d.toLocaleString("en", { month: "short" })} '${d.getFullYear().toString().slice(2)}`;
-              }}
-              tick={{ fontSize: 10, fill: "var(--text-muted)" }}
-              tickLine={false}
-              axisLine={{ stroke: "var(--border-card)" }}
-              interval="preserveStartEnd"
-            />
-            <YAxis
-              domain={[yMin, yMax]}
-              tickFormatter={(v) =>
-                `₹${v >= 1000 ? (v / 1000).toFixed(1) + "k" : v}`
-              }
-              tick={{ fontSize: 10, fill: "var(--text-muted)" }}
-              tickLine={false}
-              axisLine={false}
-              width={60}
-            />
-            <Tooltip
-              content={<CustomTooltip />}
-              cursor={{
-                stroke: "var(--border-primary)",
-                strokeWidth: 1,
-                strokeDasharray: "4 4",
-              }}
-            />
+          <CartesianGrid
+            strokeDasharray="3 3"
+            stroke="var(--border-card)"
+            opacity={0.5}
+          />
+          <XAxis
+            dataKey="date"
+            tickFormatter={(v) => {
+              const d = new Date(v);
+              return `${d.toLocaleString("default", { month: "short" })} '${d.getFullYear().toString().slice(2)}`;
+            }}
+            tick={{ fontSize: 10, fill: "var(--text-muted)" }}
+            tickLine={false}
+            axisLine={{ stroke: "var(--border-card)" }}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            domain={yDomain}
+            tickFormatter={(v) =>
+              `₹${v >= 1000 ? (v / 1000).toFixed(0) + "k" : Number(v).toFixed(0)}`
+            }
+            tick={{ fontSize: 10, fill: "var(--text-muted)" }}
+            tickLine={false}
+            axisLine={false}
+            width={58}
+            yAxisId="price"
+          />
+          <Tooltip content={<OHLCTooltip />} />
 
-            {indicators.has("bb") && (
-              <>
-                <Line
-                  dataKey="upperBand"
-                  stroke="#A78BFA"
-                  strokeWidth={1}
-                  dot={false}
-                  strokeDasharray="4 3"
-                  name="BB Upper"
-                />
-                <Line
-                  dataKey="lowerBand"
-                  stroke="#A78BFA"
-                  strokeWidth={1}
-                  dot={false}
-                  strokeDasharray="4 3"
-                  name="BB Lower"
-                />
-                <Line
-                  dataKey="upperBand1"
-                  stroke="#8B5CF6"
-                  strokeWidth={1}
-                  dot={false}
-                  strokeDasharray="2 3"
-                  name="BB 1σ Upper"
-                />
-                <Line
-                  dataKey="lowerBand1"
-                  stroke="#8B5CF6"
-                  strokeWidth={1}
-                  dot={false}
-                  strokeDasharray="2 3"
-                  name="BB 1σ Lower"
-                />
-              </>
-            )}
-            {indicators.has("ma20") && (
+          {/* BB Bands */}
+          {indicators.has("bb") && (
+            <>
               <Line
+                yAxisId="price"
+                dataKey="upperBand"
+                stroke="rgba(168,85,247,0.5)"
+                strokeWidth={1}
+                dot={false}
+                strokeDasharray="5 3"
+                name="BB+"
+                connectNulls
+              />
+              <Line
+                yAxisId="price"
+                dataKey="lowerBand"
+                stroke="rgba(168,85,247,0.5)"
+                strokeWidth={1}
+                dot={false}
+                strokeDasharray="5 3"
+                name="BB−"
+                connectNulls
+              />
+              <Line
+                yAxisId="price"
+                dataKey="upperBand1"
+                stroke="rgba(168,85,247,0.25)"
+                strokeWidth={1}
+                dot={false}
+                strokeDasharray="2 4"
+                name="BB+1σ"
+                connectNulls
+              />
+              <Line
+                yAxisId="price"
+                dataKey="lowerBand1"
+                stroke="rgba(168,85,247,0.25)"
+                strokeWidth={1}
+                dot={false}
+                strokeDasharray="2 4"
+                name="BB−1σ"
+                connectNulls
+              />
+              <Line
+                yAxisId="price"
                 dataKey="ma20"
-                stroke="#F59E0B"
+                stroke="rgba(168,85,247,0.6)"
                 strokeWidth={1.5}
                 dot={false}
-                name="MA20"
+                strokeDasharray="8 3"
+                name="BB Mid"
+                connectNulls
               />
-            )}
-            {indicators.has("ma50") && (
-              <Line
-                dataKey="ma50"
-                stroke="#3B82F6"
-                strokeWidth={1.5}
-                dot={false}
-                name="MA50"
-              />
-            )}
-            {indicators.has("ma200") && (
-              <Line
-                dataKey="ma200"
-                stroke="#EC4899"
-                strokeWidth={1.5}
-                dot={false}
-                name="MA200"
-              />
-            )}
+            </>
+          )}
 
-            {chartType === "area" ? (
-              <Area
-                type="monotone"
-                dataKey="close"
-                stroke={lineColorVal}
-                strokeWidth={2}
-                fill="url(#colorClose)"
-                dot={false}
-                name="Price"
-              />
-            ) : (
+          {/* Moving averages */}
+          {indicators.has("ma20") && !indicators.has("bb") && (
+            <Line
+              yAxisId="price"
+              dataKey="ma20"
+              stroke="#F59E0B"
+              strokeWidth={1.5}
+              dot={false}
+              name="MA20"
+              connectNulls
+            />
+          )}
+          {indicators.has("ma50") && (
+            <Line
+              yAxisId="price"
+              dataKey="ma50"
+              stroke="#3B82F6"
+              strokeWidth={1.5}
+              dot={false}
+              name="MA50"
+              connectNulls
+            />
+          )}
+          {indicators.has("ma200") && (
+            <Line
+              yAxisId="price"
+              dataKey="ma200"
+              stroke="#EC4899"
+              strokeWidth={1.5}
+              dot={false}
+              name="MA200"
+              connectNulls
+            />
+          )}
+          {indicators.has("ema") && (
+            <>
               <Line
-                type="monotone"
-                dataKey="close"
-                stroke={lineColorVal}
-                strokeWidth={2}
+                yAxisId="price"
+                dataKey="ema12"
+                stroke="#06B6D4"
+                strokeWidth={1.2}
                 dot={false}
-                name="Price"
+                strokeDasharray="4 2"
+                name="EMA12"
+                connectNulls
               />
-            )}
-          </ComposedChart>
-        </ResponsiveContainer>
-      )}
+              <Line
+                yAxisId="price"
+                dataKey="ema26"
+                stroke="#0EA5E9"
+                strokeWidth={1.2}
+                dot={false}
+                strokeDasharray="4 2"
+                name="EMA26"
+                connectNulls
+              />
+            </>
+          )}
+          {indicators.has("vwap") && (
+            <Line
+              yAxisId="price"
+              dataKey="vwap"
+              stroke="#F97316"
+              strokeWidth={1.5}
+              dot={false}
+              strokeDasharray="6 2"
+              name="VWAP"
+              connectNulls
+            />
+          )}
 
-      {/* ── Volume ── */}
-      {indicators.has("volume") && (
-        <ResponsiveContainer width="100%" height={height * 0.25}>
+          {/* ── CANDLESTICK chart type ── */}
+          {chartType === "candle" && (
+            <Bar
+              yAxisId="price"
+              dataKey="close"
+              shape={<CandlestickShape />}
+              name="OHLC"
+              maxBarSize={16}
+            >
+              {slicedData.map((d, i) => (
+                <Cell
+                  key={i}
+                  fill={d.close >= d.open ? candleUpColor : candleDownColor}
+                />
+              ))}
+            </Bar>
+          )}
+
+          {/* ── LINE chart type ── */}
+          {chartType === "line" && (
+            <Line
+              yAxisId="price"
+              type="monotone"
+              dataKey="close"
+              stroke={priceColor}
+              strokeWidth={2}
+              dot={false}
+              name="Price"
+              connectNulls
+            />
+          )}
+
+          {/* ── AREA chart type ── */}
+          {chartType === "area" && (
+            <Area
+              yAxisId="price"
+              type="monotone"
+              dataKey="close"
+              stroke={priceColor}
+              strokeWidth={2}
+              fill={isUp ? "url(#gradUp)" : "url(#gradDown)"}
+              dot={false}
+              name="Price"
+              connectNulls
+            />
+          )}
+
+          {/* Live price line */}
+          {liveQuote && (
+            <ReferenceLine
+              yAxisId="price"
+              y={liveQuote.price}
+              stroke={priceColor}
+              strokeDasharray="6 3"
+              strokeWidth={1.5}
+              label={{
+                value: `Live ₹${liveQuote.price.toFixed(2)}`,
+                fill: priceColor,
+                fontSize: 9,
+                position: "insideTopRight",
+              }}
+            />
+          )}
+        </ComposedChart>
+      </ResponsiveContainer>
+
+      {/* ── Sub chart: Volume ── */}
+      {subChart === "volume" && (
+        <ResponsiveContainer width="100%" height={subH}>
           <ComposedChart
-            data={filteredData}
-            margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
+            data={slicedData}
+            margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
           >
             <CartesianGrid
               strokeDasharray="3 3"
               stroke="var(--border-card)"
-              strokeOpacity={0.3}
+              opacity={0.3}
             />
             <XAxis dataKey="date" hide />
             <YAxis
@@ -688,27 +764,243 @@ export default function StockChart({
               width={40}
             />
             <Tooltip
-              formatter={(v: any) => [
-                `${(Number(v) / 1e6).toFixed(2)}M`,
-                "Volume",
-              ]}
               contentStyle={{
                 background: "var(--bg-card)",
                 border: "1px solid var(--border-card)",
                 borderRadius: 8,
+                fontSize: 11,
               }}
+              formatter={(v: any) => [
+                `${(Number(v) / 1e6).toFixed(2)}M`,
+                "Volume",
+              ]}
             />
-            <Bar dataKey="volume" radius={[2, 2, 0, 0]} name="Volume">
-              {filteredData.map((d, i) => (
+            <Bar dataKey="volume" maxBarSize={12} radius={[2, 2, 0, 0]}>
+              {slicedData.map((d, i) => (
                 <Cell
                   key={i}
-                  fill={d.close >= d.open ? "#4ADE8066" : "#F8717166"}
+                  fill={
+                    d.close >= d.open
+                      ? "rgba(34,197,94,0.5)"
+                      : "rgba(239,68,68,0.5)"
+                  }
                 />
               ))}
             </Bar>
+            <Line
+              dataKey="obv"
+              stroke="rgba(99,102,241,0.6)"
+              strokeWidth={1.5}
+              dot={false}
+              name="OBV"
+              connectNulls
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
+
+      {/* ── Sub chart: RSI ── */}
+      {subChart === "rsi" && (
+        <ResponsiveContainer width="100%" height={subH}>
+          <ComposedChart
+            data={slicedData}
+            margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+          >
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="var(--border-card)"
+              opacity={0.3}
+            />
+            <XAxis dataKey="date" hide />
+            <YAxis
+              domain={[0, 100]}
+              ticks={[20, 30, 50, 70, 80]}
+              tick={{ fontSize: 9, fill: "var(--text-muted)" }}
+              tickLine={false}
+              axisLine={false}
+              width={28}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "var(--bg-card)",
+                border: "1px solid var(--border-card)",
+                borderRadius: 8,
+                fontSize: 11,
+              }}
+              formatter={(v: any) => [Number(v).toFixed(1), "RSI"]}
+            />
+            <ReferenceLine
+              y={70}
+              stroke="#EF4444"
+              strokeDasharray="4 3"
+              strokeOpacity={0.5}
+            />
+            <ReferenceLine
+              y={30}
+              stroke="#22C55E"
+              strokeDasharray="4 3"
+              strokeOpacity={0.5}
+            />
+            <ReferenceLine
+              y={50}
+              stroke="var(--text-muted)"
+              strokeDasharray="2 4"
+              strokeOpacity={0.3}
+            />
+            <Area
+              type="monotone"
+              dataKey="rsi"
+              stroke="#A78BFA"
+              strokeWidth={2}
+              fill="rgba(167,139,250,0.1)"
+              dot={false}
+              name="RSI"
+              connectNulls
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
+
+      {/* ── Sub chart: MACD ── */}
+      {subChart === "macd" && (
+        <ResponsiveContainer width="100%" height={subH}>
+          <ComposedChart
+            data={slicedData}
+            margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+          >
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="var(--border-card)"
+              opacity={0.3}
+            />
+            <XAxis dataKey="date" hide />
+            <YAxis
+              tick={{ fontSize: 9, fill: "var(--text-muted)" }}
+              tickLine={false}
+              axisLine={false}
+              width={40}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "var(--bg-card)",
+                border: "1px solid var(--border-card)",
+                borderRadius: 8,
+                fontSize: 11,
+              }}
+            />
+            <ReferenceLine
+              y={0}
+              stroke="var(--text-muted)"
+              strokeOpacity={0.4}
+            />
+            <Bar
+              dataKey="macdHist"
+              name="Histogram"
+              maxBarSize={10}
+              radius={[2, 2, 0, 0]}
+            >
+              {slicedData.map((d, i) => (
+                <Cell
+                  key={i}
+                  fill={
+                    (d.macdHist ?? 0) >= 0
+                      ? "rgba(34,197,94,0.6)"
+                      : "rgba(239,68,68,0.6)"
+                  }
+                />
+              ))}
+            </Bar>
+            <Line
+              dataKey="macd"
+              stroke="#38BDF8"
+              strokeWidth={1.5}
+              dot={false}
+              name="MACD"
+              connectNulls
+            />
+            <Line
+              dataKey="macdSignal"
+              stroke="#F97316"
+              strokeWidth={1.5}
+              dot={false}
+              name="Signal"
+              connectNulls
+            />
           </ComposedChart>
         </ResponsiveContainer>
       )}
     </div>
+  );
+}
+
+// ── Proper candlestick shape for Recharts Bar ─────────────────────────────────
+// Recharts Bar passes x, y, width, height relative to the bar's y-range.
+// We use a custom shape to draw wicks + body properly.
+function CandlestickShape(props: any) {
+  const { x, y, width, height, payload } = props;
+  if (!payload || width <= 0) return null;
+  const { open, high, low, close } = payload;
+  if (open == null || close == null || high == null || low == null) return null;
+
+  const isUp = close >= open;
+  const color = isUp ? "#22C55E" : "#EF4444";
+
+  // Convert OHLC values to pixel Y using the chart's yAxis scale.
+  // Props from recharts Bar include `background` with the full bar area — we use those bounds.
+  const { background } = props;
+  if (!background) return null;
+  const chartTop = background.y;
+  const chartH = background.height;
+  const yRange = props.domain ?? [0, 1];
+  const [yMin, yMax] = yRange;
+
+  function toY(val: number) {
+    return chartTop + chartH - ((val - yMin) / (yMax - yMin)) * chartH;
+  }
+
+  const yOpen = toY(open);
+  const yClose = toY(close);
+  const yHigh = toY(high);
+  const yLow = toY(low);
+
+  const bodyTop = Math.min(yOpen, yClose);
+  const bodyBot = Math.max(yOpen, yClose);
+  const bodyH = Math.max(1, bodyBot - bodyTop);
+  const cx = x + width / 2;
+  const bw = Math.max(2, width - 2);
+  const bx = cx - bw / 2;
+
+  return (
+    <g>
+      {/* High wick */}
+      <line
+        x1={cx}
+        y1={yHigh}
+        x2={cx}
+        y2={bodyTop}
+        stroke={color}
+        strokeWidth={1.5}
+      />
+      {/* Body */}
+      <rect
+        x={bx}
+        y={bodyTop}
+        width={bw}
+        height={bodyH}
+        fill={isUp ? "transparent" : color}
+        stroke={color}
+        strokeWidth={1.5}
+        rx={0.5}
+      />
+      {/* Low wick */}
+      <line
+        x1={cx}
+        y1={bodyBot}
+        x2={cx}
+        y2={yLow}
+        stroke={color}
+        strokeWidth={1.5}
+      />
+    </g>
   );
 }

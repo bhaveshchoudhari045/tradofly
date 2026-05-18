@@ -1,7 +1,4 @@
-// lib/bollingerEngine.ts
-// Core Bollinger Band accident-pattern recommendation engine.
-// Strategy: Identifies stocks where price has touched/breached the lower Bollinger Band
-// and is showing signs of reversal — the "accident recovery" pattern.
+// lib/bollingerEngine.ts — null-safe, production-grade
 
 export interface OHLCV {
   date: string;
@@ -16,13 +13,13 @@ export interface BBResult {
   date: string;
   close: number;
   sma: number;
-  upper2: number; // +2σ
-  lower2: number; // -2σ
-  upper1: number; // +1σ
-  lower1: number; // -1σ
+  upper2: number;
+  lower2: number;
+  upper1: number;
+  lower1: number;
   stdDev: number;
-  bandwidth: number; // (upper2 - lower2) / sma
-  percentB: number; // (close - lower2) / (upper2 - lower2), 0=lower, 1=upper
+  bandwidth: number;
+  percentB: number;
 }
 
 export interface SignalMatch {
@@ -35,16 +32,16 @@ export interface SignalMatch {
     | "W_BOTTOM"
     | "UPPER_BREAK";
   direction: "BUY" | "SELL";
-  confidence: number; // 0-100
+  confidence: number;
   entryPrice: number;
   lower2: number;
   upper1: number;
   upper2: number;
   sma: number;
-  targetMin: number; // between sma and upper1
-  targetMid: number; // between upper1 and upper2 (primary target)
-  targetMax: number; // above upper2 (stretch target)
-  stopLoss: number; // just below lower2
+  targetMin: number;
+  targetMid: number;
+  targetMax: number;
+  stopLoss: number;
   riskRewardRatio: number;
   conditionDesc: string;
   percentB: number;
@@ -60,25 +57,30 @@ export interface RecommendedStock {
   changePercent: number;
   bbData: BBResult[];
   rawData: OHLCV[];
-  // computed
-  potentialGain: number; // % from entry to targetMid
-  potentialGainMax: number; // % from entry to targetMax
+  potentialGain: number;
+  potentialGainMax: number;
   daysSinceSignal: number;
   signalAge: "today" | "fresh" | "recent" | "old";
-  // Lot-based ROI
-  lotSize: number; // approximate (price-based, using 1 share = 1 unit)
+  lotSize: number;
 }
 
-/** Calculate Bollinger Bands for a series of closes */
+function safeNum(v: unknown): number {
+  if (v === null || v === undefined) return 0;
+  const n = Number(v);
+  return isFinite(n) ? n : 0;
+}
+
 export function calcBB(data: OHLCV[], period = 20, mult = 2): BBResult[] {
-  const closes = data.map((d) => d.close);
+  if (!data || data.length === 0) return [];
+  const closes = data.map((d) => safeNum(d.close));
   const out: BBResult[] = [];
 
   for (let i = 0; i < closes.length; i++) {
-    if (i < period - 1) {
+    const close = closes[i];
+    if (i < period - 1 || !isFinite(close) || close <= 0) {
       out.push({
         date: data[i].date,
-        close: closes[i],
+        close,
         sma: 0,
         upper2: 0,
         lower2: 0,
@@ -86,24 +88,38 @@ export function calcBB(data: OHLCV[], period = 20, mult = 2): BBResult[] {
         lower1: 0,
         stdDev: 0,
         bandwidth: 0,
-        percentB: 0,
+        percentB: 0.5,
       });
       continue;
     }
     const slice = closes.slice(i - period + 1, i + 1);
+    if (slice.some((v) => !isFinite(v) || v <= 0)) {
+      out.push({
+        date: data[i].date,
+        close,
+        sma: 0,
+        upper2: 0,
+        lower2: 0,
+        upper1: 0,
+        lower1: 0,
+        stdDev: 0,
+        bandwidth: 0,
+        percentB: 0.5,
+      });
+      continue;
+    }
     const mean = slice.reduce((a, b) => a + b, 0) / period;
-    const variance =
-      slice.reduce((sum, v) => sum + (v - mean) ** 2, 0) / period;
+    const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / period;
     const std = Math.sqrt(variance);
     const u2 = mean + mult * std;
     const l2 = mean - mult * std;
     const u1 = mean + std;
     const l1 = mean - std;
-    const bw = std > 0 ? (u2 - l2) / mean : 0;
-    const pctB = u2 - l2 > 0 ? (closes[i] - l2) / (u2 - l2) : 0.5;
+    const bw = mean > 0 ? (u2 - l2) / mean : 0;
+    const pctB = u2 - l2 > 0 ? (close - l2) / (u2 - l2) : 0.5;
     out.push({
       date: data[i].date,
-      close: closes[i],
+      close,
       sma: mean,
       upper2: u2,
       lower2: l2,
@@ -117,112 +133,151 @@ export function calcBB(data: OHLCV[], period = 20, mult = 2): BBResult[] {
   return out;
 }
 
-/** Detect all Bollinger-based signals in an enriched dataset */
+function calcTargets(bb: BBResult, entry: number) {
+  const tMin = bb.sma > 0 ? (bb.sma + bb.upper1) / 2 : entry * 1.02;
+  const tMid = bb.upper1 > 0 ? bb.upper1 : entry * 1.04;
+  const tMax = bb.upper2 > 0 ? bb.upper2 : entry * 1.07;
+  const sl = bb.lower2 > 0 ? bb.lower2 * 0.98 : entry * 0.95;
+  const reward = tMid - entry;
+  const risk = entry - sl;
+  return {
+    lower2: bb.lower2,
+    upper1: bb.upper1,
+    upper2: bb.upper2,
+    sma: bb.sma,
+    targetMin: tMin,
+    targetMid: tMid,
+    targetMax: tMax,
+    stopLoss: sl,
+    riskRewardRatio: risk > 0 ? parseFloat((reward / risk).toFixed(2)) : 0,
+    percentB: bb.percentB,
+    bandwidth: bb.bandwidth,
+  };
+}
+
 export function detectBBSignals(
   data: OHLCV[],
   bbData: BBResult[],
 ): SignalMatch[] {
+  if (!data || !bbData || data.length < 25) return [];
   const signals: SignalMatch[] = [];
-  const MIN = 22; // need enough history
+  const MIN = 22;
 
   for (let i = MIN; i < data.length; i++) {
     const d = data[i];
     const bb = bbData[i];
     const bbPrev = bbData[i - 1];
-    const bbPrev2 = bbData[i - 2];
-    const bbPrev3 = bbData[i - 3];
-    const dPrev = data[i - 1];
-    const dPrev2 = data[i - 2];
-    const dPrev3 = data[i - 3];
+    const d1 = data[i - 1];
+    const d2 = data[i - 2];
+    const d3 = data[i - 3];
 
-    if (!bb.sma || !bbPrev.sma) continue;
+    if (!bb?.sma || !bbPrev?.sma || bb.sma <= 0) continue;
+    if (!d?.close || !d1?.close || !d2?.close || !d3?.close) continue;
 
-    const entry = d.close;
+    const entry = safeNum(d.close);
+    if (entry <= 0) continue;
+
     const targets = calcTargets(bb, entry);
 
-    // ─── SIGNAL 1: Single-day reversal from lower band ───────────────────────
-    // Price went below lower band and came back above lower-1σ in same candle
-    if (
-      dPrev.low < bbPrev.lower2 &&
-      d.close > d.open &&
-      d.close > bb.lower1 &&
-      d.low > bb.lower2 &&
-      bb.percentB < 0.25
-    ) {
-      signals.push({
-        date: d.date,
-        index: i,
-        type: "SINGLE_DAY",
-        direction: "BUY",
-        confidence: 72,
-        entryPrice: entry,
-        ...targets,
-        conditionDesc:
-          "Touched lower band, closed above −1σ — single-day reversal",
-      });
-    }
-
-    // ─── SIGNAL 2: Multi-day recovery ────────────────────────────────────────
-    // 3+ consecutive bullish candles after a lower-band touch 10 bars ago
-    const lookback = bbData[i - 10];
-    if (
-      lookback?.sma &&
-      data[i - 10].low < lookback.lower2 &&
-      dPrev.close > dPrev.open &&
-      dPrev2.close > dPrev2.open &&
-      dPrev3.close > dPrev3.open &&
-      d.close > dPrev.close
-    ) {
-      signals.push({
-        date: d.date,
-        index: i,
-        type: "MULTI_DAY",
-        direction: "BUY",
-        confidence: 85,
-        entryPrice: entry,
-        ...targets,
-        conditionDesc:
-          "3+ bullish candles recovering from lower band — sustained reversal",
-      });
-    }
-
-    // ─── SIGNAL 3: Bollinger Squeeze breakout ────────────────────────────────
-    // Bandwidth narrowed for 5+ bars then expanded bullishly
-    if (i >= MIN + 5) {
-      const bwHistory = bbData.slice(i - 6, i).map((b) => b.bandwidth);
-      const avgBw = bwHistory.reduce((a, b) => a + b, 0) / bwHistory.length;
-      const squeezed = bwHistory.every((bw) => bw < avgBw * 0.85);
+    // Signal 1: single-day reversal
+    if (i >= 10) {
+      const d10 = data[i - 10];
+      const bb10 = bbData[i - 10];
       if (
-        squeezed &&
-        bb.bandwidth > bbPrev.bandwidth * 1.15 &&
-        d.close > bb.sma
+        d10 &&
+        bb10?.lower2 > 0 &&
+        safeNum(d10.low) < bb10.lower2 &&
+        d.close > d.open &&
+        bb.lower2 > 0 &&
+        safeNum(d.low) > bb.lower2 &&
+        bb.lower1 > 0 &&
+        d.close > bb.lower1 &&
+        bb.percentB < 0.3
       ) {
         signals.push({
           date: d.date,
           index: i,
-          type: "SQUEEZE_BREAK",
+          type: "SINGLE_DAY",
           direction: "BUY",
-          confidence: 80,
+          confidence: 72,
           entryPrice: entry,
           ...targets,
           conditionDesc:
-            "Bollinger squeeze resolved with bullish breakout above midline",
+            "Touched lower band, recovered above −1σ — single-day reversal",
         });
       }
     }
 
-    // ─── SIGNAL 4: W-Bottom (double lower band touch) ────────────────────────
-    if (i >= MIN + 8) {
-      const firstTouch = bbData
-        .slice(i - 8, i - 3)
-        .findIndex((b, j) => data[i - 8 + j].low < b.lower2);
-      const secondTouch =
-        data[i - 2].low < bbPrev2.lower2 || data[i - 1].low < bbPrev.lower2;
+    // Signal 2: multi-day recovery
+    if (i >= 12) {
+      const bb10 = bbData[i - 10];
+      const d10 = data[i - 10];
       if (
-        firstTouch >= 0 &&
+        d10 &&
+        bb10?.lower2 > 0 &&
+        safeNum(d10.low) < bb10.lower2 &&
+        d1.close > d1.open &&
+        d2.close > d2.open &&
+        d3.close > d3.open &&
+        d.close > d1.close
+      ) {
+        signals.push({
+          date: d.date,
+          index: i,
+          type: "MULTI_DAY",
+          direction: "BUY",
+          confidence: 85,
+          entryPrice: entry,
+          ...targets,
+          conditionDesc: "3+ consecutive bullish bars after lower band touch",
+        });
+      }
+    }
+
+    // Signal 3: squeeze breakout
+    if (i >= MIN + 5) {
+      const bwHist = bbData
+        .slice(i - 6, i)
+        .map((b) => b.bandwidth)
+        .filter((v) => v > 0);
+      if (bwHist.length >= 4) {
+        const avgBw = bwHist.reduce((a, b) => a + b, 0) / bwHist.length;
+        const squeezed = bwHist.slice(0, -1).every((bw) => bw < avgBw * 0.9);
+        if (
+          squeezed &&
+          bb.bandwidth > bbPrev.bandwidth * 1.1 &&
+          d.close > bb.sma
+        ) {
+          signals.push({
+            date: d.date,
+            index: i,
+            type: "SQUEEZE_BREAK",
+            direction: "BUY",
+            confidence: 80,
+            entryPrice: entry,
+            ...targets,
+            conditionDesc: "Bollinger squeeze resolved with bullish expansion",
+          });
+        }
+      }
+    }
+
+    // Signal 4: W-bottom
+    if (i >= MIN + 8) {
+      const slice8 = bbData.slice(i - 8, i - 3);
+      const firstTouch = slice8.some(
+        (b, j) => b.lower2 > 0 && safeNum(data[i - 8 + j]?.low) < b.lower2,
+      );
+      const bb2 = bbData[i - 2];
+      const bb1 = bbData[i - 1];
+      const secondTouch =
+        (bb2?.lower2 > 0 && safeNum(d2.low) < bb2.lower2) ||
+        (bb1?.lower2 > 0 && safeNum(d1.low) < bb1.lower2);
+      if (
+        firstTouch &&
         secondTouch &&
-        bb.percentB < 0.3 &&
-        d.close > dPrev.close
+        bb.percentB < 0.35 &&
+        d.close > d1.close
       ) {
         signals.push({
           date: d.date,
@@ -233,14 +288,31 @@ export function detectBBSignals(
           entryPrice: entry,
           ...targets,
           conditionDesc:
-            "W-bottom pattern — double lower band touch with confirmed reversal",
+            "W-bottom — double lower band test with confirmed reversal",
         });
       }
     }
 
-    // ─── SIGNAL 5: Upper band break (potential overbought) ────────────────────
-    if (bbPrev.close < bbPrev.upper2 && d.close > bb.upper2) {
-      const t = calcTargets(bb, entry, true);
+    // Signal 5: upper break (sell)
+    if (
+      bb.upper2 > 0 &&
+      bbPrev.upper2 > 0 &&
+      d.close > bb.upper2 &&
+      d1.close < bbPrev.upper2
+    ) {
+      const sellTargets = {
+        lower2: bb.lower2,
+        upper1: bb.upper1,
+        upper2: bb.upper2,
+        sma: bb.sma,
+        targetMin: bb.upper1,
+        targetMid: bb.sma,
+        targetMax: bb.lower1,
+        stopLoss: entry * 1.04,
+        riskRewardRatio: 1.0,
+        percentB: bb.percentB,
+        bandwidth: bb.bandwidth,
+      };
       signals.push({
         date: d.date,
         index: i,
@@ -248,9 +320,9 @@ export function detectBBSignals(
         direction: "SELL",
         confidence: 65,
         entryPrice: entry,
-        ...t,
+        ...sellTargets,
         conditionDesc:
-          "Price broke above upper band — potential reversal or continuation",
+          "Price broke above upper BB — potential overbought reversal",
       });
     }
   }
@@ -258,45 +330,6 @@ export function detectBBSignals(
   return signals;
 }
 
-function calcTargets(bb: BBResult, entry: number, isSell = false) {
-  if (isSell) {
-    return {
-      lower2: bb.lower2,
-      upper1: bb.upper1,
-      upper2: bb.upper2,
-      sma: bb.sma,
-      targetMin: bb.upper1,
-      targetMid: bb.sma,
-      targetMax: bb.lower1,
-      stopLoss: entry * 1.04,
-      riskRewardRatio: parseFloat(
-        ((entry - bb.sma) / (bb.upper2 * 1.04 - entry)).toFixed(2),
-      ),
-      percentB: bb.percentB,
-      bandwidth: bb.bandwidth,
-    };
-  }
-  const tMin = (bb.sma + bb.upper1) / 2;
-  const tMid = bb.upper1;
-  const tMax = bb.upper2;
-  const reward = tMid - entry;
-  const risk = entry - bb.lower2 * 0.98;
-  return {
-    lower2: bb.lower2,
-    upper1: bb.upper1,
-    upper2: bb.upper2,
-    sma: bb.sma,
-    targetMin: tMin,
-    targetMid: tMid,
-    targetMax: tMax,
-    stopLoss: bb.lower2 * 0.98,
-    riskRewardRatio: risk > 0 ? parseFloat((reward / risk).toFixed(2)) : 0,
-    percentB: bb.percentB,
-    bandwidth: bb.bandwidth,
-  };
-}
-
-/** Compute lot-based ROI table */
 export interface LotROI {
   lots: number;
   invested: number;
@@ -316,54 +349,74 @@ export function calcLotROI(
   targetMin: number,
   targetMid: number,
   targetMax: number,
-  stopLoss: number,
 ): LotROI[] {
   const LOT_SIZES = [1, 5, 10, 25, 50, 100, 500, 1000];
+  const e = safeNum(entry);
+  const tMin = safeNum(targetMin);
+  const tMid = safeNum(targetMid);
+  const tMax = safeNum(targetMax);
+  if (e <= 0)
+    return LOT_SIZES.map((lots) => ({
+      lots,
+      invested: 0,
+      targetMinReturn: 0,
+      targetMidReturn: 0,
+      targetMaxReturn: 0,
+      profitMin: 0,
+      profitMid: 0,
+      profitMax: 0,
+      pctMin: 0,
+      pctMid: 0,
+      pctMax: 0,
+    }));
+
   return LOT_SIZES.map((lots) => {
-    const invested = entry * lots;
-    const tMinReturn = targetMin * lots;
-    const tMidReturn = targetMid * lots;
-    const tMaxReturn = targetMax * lots;
-    const profitMin = tMinReturn - invested;
-    const profitMid = tMidReturn - invested;
-    const profitMax = tMaxReturn - invested;
+    const invested = e * lots;
+    const tMinRet = tMin * lots;
+    const tMidRet = tMid * lots;
+    const tMaxRet = tMax * lots;
+    const pMin = tMinRet - invested;
+    const pMid = tMidRet - invested;
+    const pMax = tMaxRet - invested;
     return {
       lots,
       invested,
-      targetMinReturn: tMinReturn,
-      targetMidReturn: tMidReturn,
-      targetMaxReturn: tMaxReturn,
-      profitMin,
-      profitMid,
-      profitMax,
-      pctMin: invested > 0 ? (profitMin / invested) * 100 : 0,
-      pctMid: invested > 0 ? (profitMid / invested) * 100 : 0,
-      pctMax: invested > 0 ? (profitMax / invested) * 100 : 0,
+      targetMinReturn: tMinRet,
+      targetMidReturn: tMidRet,
+      targetMaxReturn: tMaxRet,
+      profitMin: pMin,
+      profitMid: pMid,
+      profitMax: pMax,
+      pctMin: (pMin / invested) * 100,
+      pctMid: (pMid / invested) * 100,
+      pctMax: (pMax / invested) * 100,
     };
   });
 }
 
-/** Classify signal age */
 export function classifyAge(signalDate: string): {
   daysSince: number;
   age: "today" | "fresh" | "recent" | "old";
 } {
-  const now = new Date();
-  const sd = new Date(signalDate);
-  const diffMs = now.getTime() - sd.getTime();
-  const daysSince = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  const age =
-    daysSince === 0
-      ? "today"
-      : daysSince <= 2
-        ? "fresh"
-        : daysSince <= 7
-          ? "recent"
-          : "old";
-  return { daysSince, age };
+  try {
+    const now = new Date();
+    const sd = new Date(signalDate);
+    const diffMs = now.getTime() - sd.getTime();
+    const daysSince = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+    const age =
+      daysSince === 0
+        ? "today"
+        : daysSince <= 2
+          ? "fresh"
+          : daysSince <= 7
+            ? "recent"
+            : "old";
+    return { daysSince, age };
+  } catch {
+    return { daysSince: 999, age: "old" };
+  }
 }
 
-/** Filter signals by period */
 export function filterByPeriod(
   signals: SignalMatch[],
   period: "1d" | "1w" | "1m",
@@ -373,40 +426,45 @@ export function filterByPeriod(
   if (period === "1d") cutoff.setDate(now.getDate() - 1);
   else if (period === "1w") cutoff.setDate(now.getDate() - 7);
   else cutoff.setDate(now.getDate() - 30);
-  return signals.filter((s) => new Date(s.date) >= cutoff);
+  return signals.filter((s) => {
+    try {
+      return new Date(s.date) >= cutoff;
+    } catch {
+      return false;
+    }
+  });
 }
 
-/** Live mode: split today's signals into "confirmed" vs "approaching" */
 export function splitLiveSignals(
   signals: SignalMatch[],
   bbData: BBResult[],
 ): { confirmed: SignalMatch[]; approaching: SignalMatch[] } {
-  // Confirmed = signals from last 3 trading days
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 3);
-  const cutoffStr = cutoff.toISOString().split("T")[0];
-  const confirmed = signals.filter((s) => s.date >= cutoffStr);
-
-  // Approaching = latest bar near lower band but no confirmed signal
-  const latestBB = bbData[bbData.length - 1];
+  const today = new Date().toISOString().split("T")[0];
+  const confirmed = signals.filter((s) => s.date === today);
   const approaching: SignalMatch[] = [];
 
-  if (latestBB?.sma > 0) {
-    const pctB = latestBB.percentB;
-    if (pctB < 0.3 && confirmed.length === 0) {
-      const targets = calcTargets(latestBB, latestBB.close);
-      const today = new Date().toISOString().split("T")[0];
-      approaching.push({
-        date: today,
-        index: bbData.length - 1,
-        type: "SINGLE_DAY",
-        direction: "BUY",
-        confidence: Math.round(40 + (0.3 - pctB) * 200),
-        entryPrice: latestBB.close,
-        ...targets,
-        conditionDesc: `Price approaching lower band — %B at ${(pctB * 100).toFixed(1)}%, setup forming`,
-      });
+  if (!confirmed.length && bbData.length > 0) {
+    const latestBB = bbData[bbData.length - 1];
+    if (latestBB?.sma > 0 && latestBB.percentB < 0.2) {
+      const entry = latestBB.close;
+      if (entry > 0) {
+        const targets = calcTargets(latestBB, entry);
+        const conf = Math.round(
+          Math.min(80, 40 + (0.2 - latestBB.percentB) * 200),
+        );
+        approaching.push({
+          date: today,
+          index: bbData.length - 1,
+          type: "SINGLE_DAY",
+          direction: "BUY",
+          confidence: conf,
+          entryPrice: entry,
+          ...targets,
+          conditionDesc: `Near lower band (${(latestBB.percentB * 100).toFixed(1)}%B) — setup forming`,
+        });
+      }
     }
   }
+
   return { confirmed, approaching };
 }

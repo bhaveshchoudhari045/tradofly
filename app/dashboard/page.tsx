@@ -93,16 +93,16 @@ export default function DashboardPage() {
   const [mounted, setMounted] = useState(false);
 
   // ✅ CORRECT — only registers once, never wipes existing data
-useEffect(() => {
-  setMounted(true);
-}, []);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
-// Separate effect, only runs if truly not authenticated
-useEffect(() => {
-  if (mounted && !isAuthenticated) {
-    register("Demo User", "demo@tradofly.com", 1000000);
-  }
-}, [mounted, isAuthenticated]);
+  // Separate effect, only runs if truly not authenticated
+  useEffect(() => {
+    if (mounted && !isAuthenticated) {
+      register("Demo User", "demo@tradofly.com", 1000000);
+    }
+  }, [mounted, isAuthenticated]);
 
   if (!mounted) return null;
 
@@ -313,7 +313,12 @@ useEffect(() => {
           />
           <StatCard
             label="Total P&L"
-            value={`${isUp ? "+" : ""}₹${Math.abs(pnl).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`}
+            value={`${isUp ? "+" : "-"}₹${Math.abs(pnl).toLocaleString(
+              "en-IN",
+              {
+                maximumFractionDigits: 0,
+              },
+            )}`}
             sub={`${isUp ? "▲" : "▼"} ${Math.abs(pnlPercent).toFixed(2)}% overall`}
             icon={isUp ? TrendingUp : TrendingDown}
             color={isUp ? "var(--accent-green)" : "var(--accent-red)"}
