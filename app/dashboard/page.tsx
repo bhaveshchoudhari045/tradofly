@@ -1,4 +1,5 @@
 "use client";
+import { useCallback } from "react";
 import { useEffect, useState } from "react";
 import AppLayout from "@/components/AppLayout";
 import { useAppStore } from "@/store/appStore";
@@ -91,7 +92,7 @@ export default function DashboardPage() {
   const [addingFunds, setAddingFunds] = useState(false);
   const [fundAmount, setFundAmount] = useState("100000");
   const [mounted, setMounted] = useState(false);
-
+  const { updatePositionPrices } = useAppStore();
   // ✅ CORRECT — only registers once, never wipes existing data
   useEffect(() => {
     setMounted(true);
@@ -104,8 +105,28 @@ export default function DashboardPage() {
     }
   }, [mounted, isAuthenticated]);
 
-  if (!mounted) return null;
+  useEffect(() => {
+    if (!mounted || positions.length === 0) return;
 
+    async function refreshPrices() {
+      const updates = await Promise.allSettled(
+        positions.map(async (p) => {
+          const res = await fetch(`/api/stock?symbol=${p.symbol}&type=quote`);
+          const data = await res.json();
+          return { symbol: p.symbol, price: data.price };
+        }),
+      );
+      const valid = updates
+        .filter((r) => r.status === "fulfilled")
+        .map((r) => (r as any).value)
+        .filter((v) => v.price > 0);
+      if (valid.length > 0) updatePositionPrices(valid);
+    }
+
+    refreshPrices();
+  }, [mounted, positions.length]);
+
+  if (!mounted) return null;
   const portfolioValue = getPortfolioValue();
   const { pnl, pnlPercent } = getTotalPnL();
   const totalInvested = positions.reduce((s, p) => s + p.totalInvested, 0);
@@ -592,7 +613,7 @@ export default function DashboardPage() {
                       className={p.pnl >= 0 ? "price-up" : "price-down"}
                       style={{ fontFamily: "JetBrains Mono, monospace" }}
                     >
-                      {p.pnl >= 0 ? "+" : ""}₹
+                      {p.pnl >= 0 ? "+" : "-"}₹
                       {Math.abs(p.pnl).toLocaleString("en-IN", {
                         maximumFractionDigits: 0,
                       })}

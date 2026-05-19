@@ -388,8 +388,8 @@ function filterByCandles(
   period: "1d" | "1w" | "1m",
 ): SignalMatch[] {
   if (rawData.length === 0) return [];
-  // How many candles back to consider "recent"
-  const candlesBack = period === "1d" ? 3 : period === "1w" ? 5 : 4;
+  // 1d = last 5 trading days (1 week), 1w = last 8 weekly candles, 1m = last 6 monthly candles
+  const candlesBack = period === "1d" ? 5 : period === "1w" ? 8 : 6;
   const cutoffIdx = Math.max(0, rawData.length - candlesBack);
   const cutoffDate = rawData[cutoffIdx].date;
   return signals.filter((s) => s.date >= cutoffDate);

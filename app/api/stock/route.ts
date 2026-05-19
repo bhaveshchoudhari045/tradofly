@@ -12,7 +12,32 @@ export async function GET(request: NextRequest) {
     | "1d"
     | "1wk"
     | "1mo";
-
+  // Batch quotes
+  if (type === "batch") {
+    const symbols = searchParams.get("symbols")?.split(",") ?? [];
+    if (!symbols.length) return NextResponse.json([]);
+    const results = await Promise.allSettled(
+      symbols.map(async (sym) => {
+        const q = await yf.quote(sym.trim());
+        return {
+          symbol: q.symbol,
+          name: (q as any).longName || (q as any).shortName || sym,
+          price: q.regularMarketPrice ?? 0,
+          change: q.regularMarketChange ?? 0,
+          changePercent: q.regularMarketChangePercent ?? 0,
+          open: q.regularMarketOpen ?? 0,
+          high: q.regularMarketDayHigh ?? 0,
+          low: q.regularMarketDayLow ?? 0,
+          prevClose: q.regularMarketPreviousClose ?? 0,
+          volume: q.regularMarketVolume ?? 0,
+        };
+      }),
+    );
+    const data = results
+      .filter((r) => r.status === "fulfilled")
+      .map((r) => (r as any).value);
+    return NextResponse.json(data);
+  }
   if (!symbol) {
     return NextResponse.json({ error: "Symbol required" }, { status: 400 });
   }

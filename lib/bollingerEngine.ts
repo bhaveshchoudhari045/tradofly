@@ -439,19 +439,28 @@ export function splitLiveSignals(
   signals: SignalMatch[],
   bbData: BBResult[],
 ): { confirmed: SignalMatch[]; approaching: SignalMatch[] } {
-  const today = new Date().toISOString().split("T")[0];
-  const confirmed = signals.filter((s) => s.date === today);
+  // Use last 3 trading days as "today" window since market may not have updated yet
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 3);
+  const cutoffStr = cutoff.toISOString().split("T")[0];
+
+  const confirmed = signals.filter((s) => s.date >= cutoffStr);
   const approaching: SignalMatch[] = [];
 
-  if (!confirmed.length && bbData.length > 0) {
+  if (bbData.length > 0) {
     const latestBB = bbData[bbData.length - 1];
-    if (latestBB?.sma > 0 && latestBB.percentB < 0.2) {
+    if (
+      latestBB?.sma > 0 &&
+      latestBB.percentB < 0.25 &&
+      confirmed.length === 0
+    ) {
       const entry = latestBB.close;
       if (entry > 0) {
         const targets = calcTargets(latestBB, entry);
         const conf = Math.round(
-          Math.min(80, 40 + (0.2 - latestBB.percentB) * 200),
+          Math.min(80, 40 + (0.25 - latestBB.percentB) * 240),
         );
+        const today = new Date().toISOString().split("T")[0];
         approaching.push({
           date: today,
           index: bbData.length - 1,

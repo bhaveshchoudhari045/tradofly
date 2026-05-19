@@ -26,6 +26,7 @@ interface StockChartProps {
   symbol: string;
   height?: number;
   showLivePrice?: boolean;
+  onRangeChange?: (range: string) => void;
 }
 
 type ChartType = "candle" | "line" | "area";
@@ -39,8 +40,17 @@ type Indicator =
   | "volume"
   | "rsi"
   | "macd";
-type Range = "1W" | "1M" | "3M" | "6M" | "1Y" | "2Y" | "ALL";
-
+type Range =
+  | "1H"
+  | "1D"
+  | "5D"
+  | "1W"
+  | "1M"
+  | "3M"
+  | "6M"
+  | "1Y"
+  | "2Y"
+  | "ALL";
 // ── Custom candlestick renderer ───────────────────────────────────────────────
 const CandlestickBar = (props: any) => {
   const { x, y, width, height, payload, chartHeight } = props;
@@ -224,6 +234,7 @@ export default function StockChart({
   symbol,
   height = 420,
   showLivePrice = true,
+  onRangeChange,
 }: StockChartProps) {
   const [chartType, setChartType] = useState<ChartType>("candle");
   const [indicators, setIndicators] = useState<Set<Indicator>>(
@@ -242,6 +253,9 @@ export default function StockChart({
   } = useRealtimeQuote(showLivePrice ? symbol : null, 30_000);
 
   const ranges: Record<Range, number> = {
+    "1H": 12, // 12 x 5min bars = 1 hour
+    "1D": 26, // 26 x 15min = ~6.5 hours
+    "5D": 80,
     "1W": 7,
     "1M": 22,
     "3M": 66,
@@ -404,11 +418,16 @@ export default function StockChart({
       >
         {/* Range */}
         <div style={{ display: "flex", gap: 3 }}>
-          {(["1W", "1M", "3M", "6M", "1Y", "2Y", "ALL"] as Range[]).map((r) => (
+          {(
+            ["1H", "1D", "1W", "1M", "3M", "6M", "1Y", "2Y", "ALL"] as Range[]
+          ).map((r) => (
             <button
               key={r}
               style={btnStyle(range === r)}
-              onClick={() => setRange(r)}
+              onClick={() => {
+                setRange(r);
+                onRangeChange?.(r);
+              }}
             >
               {r}
             </button>
@@ -682,14 +701,15 @@ export default function StockChart({
             <Bar
               yAxisId="price"
               dataKey="close"
-              shape={<CandlestickShape />}
+              shape={(props: any) => <CandlestickShape {...props} />}
               name="OHLC"
               maxBarSize={16}
+              isAnimationActive={false}
             >
               {slicedData.map((d, i) => (
                 <Cell
                   key={i}
-                  fill={d.close >= d.open ? candleUpColor : candleDownColor}
+                  fill={d.close >= d.open ? "#22C55E" : "#EF4444"}
                 />
               ))}
             </Bar>
@@ -937,31 +957,20 @@ export default function StockChart({
 // Recharts Bar passes x, y, width, height relative to the bar's y-range.
 // We use a custom shape to draw wicks + body properly.
 function CandlestickShape(props: any) {
-  const { x, y, width, height, payload } = props;
-  if (!payload || width <= 0) return null;
+  const { x, width, payload, yAxis } = props;
+  if (!payload || width <= 0 || !yAxis?.scale) return null;
+
   const { open, high, low, close } = payload;
   if (open == null || close == null || high == null || low == null) return null;
 
   const isUp = close >= open;
   const color = isUp ? "#22C55E" : "#EF4444";
+  const scale = yAxis.scale;
 
-  // Convert OHLC values to pixel Y using the chart's yAxis scale.
-  // Props from recharts Bar include `background` with the full bar area — we use those bounds.
-  const { background } = props;
-  if (!background) return null;
-  const chartTop = background.y;
-  const chartH = background.height;
-  const yRange = props.domain ?? [0, 1];
-  const [yMin, yMax] = yRange;
-
-  function toY(val: number) {
-    return chartTop + chartH - ((val - yMin) / (yMax - yMin)) * chartH;
-  }
-
-  const yOpen = toY(open);
-  const yClose = toY(close);
-  const yHigh = toY(high);
-  const yLow = toY(low);
+  const yOpen = scale(open);
+  const yClose = scale(close);
+  const yHigh = scale(high);
+  const yLow = scale(low);
 
   const bodyTop = Math.min(yOpen, yClose);
   const bodyBot = Math.max(yOpen, yClose);
@@ -972,7 +981,6 @@ function CandlestickShape(props: any) {
 
   return (
     <g>
-      {/* High wick */}
       <line
         x1={cx}
         y1={yHigh}
@@ -981,7 +989,6 @@ function CandlestickShape(props: any) {
         stroke={color}
         strokeWidth={1.5}
       />
-      {/* Body */}
       <rect
         x={bx}
         y={bodyTop}
@@ -992,7 +999,6 @@ function CandlestickShape(props: any) {
         strokeWidth={1.5}
         rx={0.5}
       />
-      {/* Low wick */}
       <line
         x1={cx}
         y1={bodyBot}
