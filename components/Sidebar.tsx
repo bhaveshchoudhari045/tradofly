@@ -29,6 +29,7 @@ const navLinks = [
   { href: "/predictor", icon: Brain, label: "Predictor" },
   { href: "/news", icon: Newspaper, label: "News" },
   { href: "/recommended", icon: Zap, label: "Recommended" },
+  { href: "/quicksuggestions", icon: BarChart2, label: "Stock Scan" },
 ];
 
 export default function Sidebar() {

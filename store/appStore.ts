@@ -1,7 +1,69 @@
 "use client";
+// store/appStore.ts — enhanced with P&L on transactions + target/stop-loss orders
+
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { User, Position, Transaction, WatchlistItem } from "@/types";
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  balance: number;
+  initialBalance: number;
+  createdAt: string;
+  avatar?: string;
+}
+
+export interface Position {
+  id: string;
+  userId: string;
+  symbol: string;
+  name: string;
+  quantity: number;
+  avgBuyPrice: number;
+  currentPrice: number;
+  totalInvested: number;
+  currentValue: number;
+  pnl: number;
+  pnlPercent: number;
+  buyDate: string;
+  // Target/SL tracking
+  targetPrice?: number;
+  stopLossPrice?: number;
+  targetHit?: boolean;
+  stopLossHit?: boolean;
+  notes?: string;
+}
+
+export interface Transaction {
+  id: string;
+  userId: string;
+  symbol: string;
+  name: string;
+  type: "BUY" | "SELL" | "DEPOSIT" | "WITHDRAW";
+  quantity: number;
+  price: number;
+  total: number;
+  date: string;
+  status: "COMPLETED" | "PENDING" | "FAILED";
+  // P&L fields (populated on SELL)
+  avgBuyPrice?: number; // the average buy price at time of sale
+  realizedPnl?: number; // actual profit/loss in ₹
+  realizedPnlPct?: number; // actual profit/loss in %
+  holdingDays?: number; // how many days stock was held
+  targetPrice?: number; // target that was set
+  stopLossPrice?: number; // stop-loss that was set
+}
+
+export interface WatchlistItem {
+  symbol: string;
+  name?: string;
+  addedAt: string;
+}
+
+function generateId() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
 
 interface AppState {
   // Theme
@@ -21,12 +83,13 @@ interface AppState {
   transactions: Transaction[];
   watchlist: WatchlistItem[];
 
-  // Trading actions
+  // Trading
   buyStock: (
     symbol: string,
     name: string,
     quantity: number,
     price: number,
+    opts?: { targetPrice?: number; stopLossPrice?: number; notes?: string },
   ) => { success: boolean; message: string };
   sellStock: (
     symbol: string,
@@ -34,19 +97,20 @@ interface AppState {
     price: number,
   ) => { success: boolean; message: string };
   updatePositionPrices: (updates: { symbol: string; price: number }[]) => void;
+  updatePositionTargets: (
+    symbol: string,
+    opts: { targetPrice?: number; stopLossPrice?: number; notes?: string },
+  ) => void;
 
   // Watchlist
-  addToWatchlist: (symbol: string) => void;
+  addToWatchlist: (symbol: string, name?: string) => void;
   removeFromWatchlist: (symbol: string) => void;
   isInWatchlist: (symbol: string) => boolean;
 
   // Portfolio stats
   getPortfolioValue: () => number;
   getTotalPnL: () => { pnl: number; pnlPercent: number };
-}
-
-function generateId() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  getTotalRealizedPnL: () => number;
 }
 
 export const useAppStore = create<AppState>()(
@@ -60,6 +124,7 @@ export const useAppStore = create<AppState>()(
       isAuthenticated: false,
 
       login: (user) => set({ user, isAuthenticated: true }),
+
       logout: () =>
         set({
           user: null,
@@ -69,7 +134,7 @@ export const useAppStore = create<AppState>()(
           watchlist: [],
         }),
 
-      register: (name, email, initialBalance = 1000000) => {
+      register: (name, email, initialBalance = 1_000_000) => {
         const user: User = {
           id: generateId(),
           name,
@@ -125,19 +190,21 @@ export const useAppStore = create<AppState>()(
       transactions: [],
       watchlist: [],
 
-      buyStock: (symbol, name, quantity, price) => {
+      buyStock: (symbol, name, quantity, price, opts = {}) => {
         const { user, positions } = get();
         if (!user) return { success: false, message: "Not logged in" };
         const total = quantity * price;
-        if (user.balance < total)
+        if (user.balance < total) {
           return {
             success: false,
-            message: `Insufficient funds. Need ₹${total.toFixed(2)}, have ₹${user.balance.toFixed(2)}`,
+            message: `Insufficient funds. Need ₹${total.toLocaleString("en-IN", { maximumFractionDigits: 2 })}, have ₹${user.balance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`,
           };
+        }
 
         set((s) => {
           const existingIdx = s.positions.findIndex((p) => p.symbol === symbol);
           let newPositions = [...s.positions];
+
           if (existingIdx >= 0) {
             const existing = newPositions[existingIdx];
             const newQty = existing.quantity + quantity;
@@ -153,6 +220,10 @@ export const useAppStore = create<AppState>()(
               currentPrice: price,
               pnl: (price - newAvg) * newQty,
               pnlPercent: ((price - newAvg) / newAvg) * 100,
+              // Update targets if provided
+              targetPrice: opts.targetPrice ?? existing.targetPrice,
+              stopLossPrice: opts.stopLossPrice ?? existing.stopLossPrice,
+              notes: opts.notes ?? existing.notes,
             };
           } else {
             newPositions.push({
@@ -168,8 +239,12 @@ export const useAppStore = create<AppState>()(
               pnl: 0,
               pnlPercent: 0,
               buyDate: new Date().toISOString(),
+              targetPrice: opts.targetPrice,
+              stopLossPrice: opts.stopLossPrice,
+              notes: opts.notes,
             });
           }
+
           const tx: Transaction = {
             id: generateId(),
             userId: user.id,
@@ -181,13 +256,17 @@ export const useAppStore = create<AppState>()(
             total,
             date: new Date().toISOString(),
             status: "COMPLETED",
+            targetPrice: opts.targetPrice,
+            stopLossPrice: opts.stopLossPrice,
           };
+
           return {
             user: { ...s.user!, balance: s.user!.balance - total },
             positions: newPositions,
             transactions: [tx, ...s.transactions],
           };
         });
+
         return {
           success: true,
           message: `Bought ${quantity} shares of ${symbol} @ ₹${price.toFixed(2)}`,
@@ -199,14 +278,27 @@ export const useAppStore = create<AppState>()(
         if (!user) return { success: false, message: "Not logged in" };
         const position = positions.find((p) => p.symbol === symbol);
         if (!position) return { success: false, message: "Position not found" };
-        if (position.quantity < quantity)
+        if (position.quantity < quantity) {
           return {
             success: false,
             message: `Only ${position.quantity} shares available`,
           };
+        }
+
+        // Calculate realized P&L
+        const avgBuyPrice = position.avgBuyPrice;
+        const realizedPnl = (price - avgBuyPrice) * quantity;
+        const realizedPnlPct =
+          avgBuyPrice > 0 ? ((price - avgBuyPrice) / avgBuyPrice) * 100 : 0;
+        const holdingDays = Math.floor(
+          (Date.now() - new Date(position.buyDate).getTime()) /
+            (1000 * 60 * 60 * 24),
+        );
+        const proceeds = quantity * price;
 
         set((s) => {
           let newPositions = s.positions.filter((p) => p.symbol !== symbol);
+
           if (position.quantity > quantity) {
             const remQty = position.quantity - quantity;
             newPositions = [
@@ -219,10 +311,11 @@ export const useAppStore = create<AppState>()(
                 pnlPercent:
                   ((price - position.avgBuyPrice) / position.avgBuyPrice) * 100,
                 currentPrice: price,
+                totalInvested: position.avgBuyPrice * remQty,
               },
             ];
           }
-          const proceeds = quantity * price;
+
           const tx: Transaction = {
             id: generateId(),
             userId: user.id,
@@ -234,16 +327,24 @@ export const useAppStore = create<AppState>()(
             total: proceeds,
             date: new Date().toISOString(),
             status: "COMPLETED",
+            avgBuyPrice,
+            realizedPnl,
+            realizedPnlPct,
+            holdingDays,
+            targetPrice: position.targetPrice,
+            stopLossPrice: position.stopLossPrice,
           };
+
           return {
             user: { ...s.user!, balance: s.user!.balance + proceeds },
             positions: newPositions,
             transactions: [tx, ...s.transactions],
           };
         });
+
         return {
           success: true,
-          message: `Sold ${quantity} shares of ${symbol} @ ₹${price.toFixed(2)}`,
+          message: `Sold ${quantity} shares @ ₹${price.toFixed(2)} · P&L: ${realizedPnl >= 0 ? "+" : ""}₹${realizedPnl.toFixed(2)} (${realizedPnlPct.toFixed(2)}%)`,
         };
       },
 
@@ -251,11 +352,13 @@ export const useAppStore = create<AppState>()(
         set((s) => ({
           positions: s.positions.map((pos) => {
             const upd = updates.find((u) => u.symbol === pos.symbol);
-            if (!upd) return pos;
+            if (!upd || upd.price <= 0) return pos;
             const currentValue = upd.price * pos.quantity;
             const pnl = (upd.price - pos.avgBuyPrice) * pos.quantity;
             const pnlPercent =
-              ((upd.price - pos.avgBuyPrice) / pos.avgBuyPrice) * 100;
+              pos.avgBuyPrice > 0
+                ? ((upd.price - pos.avgBuyPrice) / pos.avgBuyPrice) * 100
+                : 0;
             return {
               ...pos,
               currentPrice: upd.price,
@@ -266,13 +369,27 @@ export const useAppStore = create<AppState>()(
           }),
         })),
 
-      addToWatchlist: (symbol) =>
+      updatePositionTargets: (symbol, opts) =>
+        set((s) => ({
+          positions: s.positions.map((p) =>
+            p.symbol !== symbol
+              ? p
+              : {
+                  ...p,
+                  targetPrice: opts.targetPrice ?? p.targetPrice,
+                  stopLossPrice: opts.stopLossPrice ?? p.stopLossPrice,
+                  notes: opts.notes ?? p.notes,
+                },
+          ),
+        })),
+
+      addToWatchlist: (symbol, name) =>
         set((s) => {
           if (s.watchlist.find((w) => w.symbol === symbol)) return s;
           return {
             watchlist: [
               ...s.watchlist,
-              { symbol, addedAt: new Date().toISOString() },
+              { symbol, name, addedAt: new Date().toISOString() },
             ],
           };
         }),
@@ -299,21 +416,29 @@ export const useAppStore = create<AppState>()(
           (sum, p) => sum + p.totalInvested,
           0,
         );
-        const pnlPercent =
-          totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
-        return { pnl: totalPnl, pnlPercent };
+        return {
+          pnl: totalPnl,
+          pnlPercent: totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0,
+        };
+      },
+
+      getTotalRealizedPnL: () => {
+        const { transactions } = get();
+        return transactions
+          .filter((t) => t.type === "SELL" && t.realizedPnl !== undefined)
+          .reduce((sum, t) => sum + (t.realizedPnl ?? 0), 0);
       },
     }),
     {
-      name: "profitpulse-storage",
+      name: "tradofly-storage",
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        theme: state.theme,
-        user: state.user,
-        isAuthenticated: state.isAuthenticated,
-        positions: state.positions,
-        transactions: state.transactions,
-        watchlist: state.watchlist,
+      partialize: (s) => ({
+        theme: s.theme,
+        user: s.user,
+        isAuthenticated: s.isAuthenticated,
+        positions: s.positions,
+        transactions: s.transactions,
+        watchlist: s.watchlist,
       }),
     },
   ),

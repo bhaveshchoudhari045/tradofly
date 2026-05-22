@@ -1,5 +1,5 @@
 "use client";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useEffect, useState } from "react";
 import AppLayout from "@/components/AppLayout";
 import { useAppStore } from "@/store/appStore";
@@ -10,6 +10,11 @@ import {
   BarChart2,
   Clock,
   Plus,
+  DollarSign,
+  Target,
+  ArrowUpRight,
+  ArrowDownRight,
+  Activity,
 } from "lucide-react";
 import {
   LineChart,
@@ -21,13 +26,66 @@ import {
   PieChart,
   Pie,
   Cell,
+  AreaChart,
+  Area,
 } from "recharts";
 
-function StatCard({ label, value, sub, color, icon: Icon }: any) {
+// ── Animated counter ──────────────────────────────────────────────────────────
+function AnimNumber({
+  value,
+  prefix = "",
+  suffix = "",
+  decimals = 0,
+  color,
+}: any) {
+  const [d, setD] = useState(value);
+  const fromRef = useRef(value); // ← track previous value without triggering re-render
+
+  useEffect(() => {
+    const from = fromRef.current;
+    const to = value;
+    fromRef.current = to; // ← update ref immediately
+
+    if (Math.abs(to - from) < 0.01) {
+      setD(to);
+      return;
+    }
+    const start = performance.now();
+    let rafId: number;
+    rafId = requestAnimationFrame(function tick(now: number) {
+      const t = Math.min((now - start) / 600, 1);
+      const e = 1 - Math.pow(1 - t, 3);
+      setD(from + (to - from) * e);
+      if (t < 1) rafId = requestAnimationFrame(tick);
+      else setD(to);
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [value]); // ← only re-runs when `value` prop changes
+
+  const formatted = d.toLocaleString("en-IN", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return (
+    <span style={{ color }}>
+      {prefix}
+      {formatted}
+      {suffix}
+    </span>
+  );
+}
+
+function StatCard({ label, value, sub, color, icon: Icon, trend }: any) {
   return (
     <div
       className="card"
-      style={{ padding: 20, display: "flex", flexDirection: "column", gap: 8 }}
+      style={{
+        padding: 20,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        transition: "all 0.2s",
+      }}
     >
       <div
         style={{
@@ -38,9 +96,9 @@ function StatCard({ label, value, sub, color, icon: Icon }: any) {
       >
         <span
           style={{
-            fontSize: 12,
+            fontSize: 11,
             color: "var(--text-muted)",
-            fontWeight: 600,
+            fontWeight: 700,
             textTransform: "uppercase",
             letterSpacing: "0.06em",
           }}
@@ -63,16 +121,16 @@ function StatCard({ label, value, sub, color, icon: Icon }: any) {
       </div>
       <div
         style={{
-          fontSize: 26,
-          fontWeight: 800,
-          color: "var(--text-primary)",
+          fontSize: 24,
+          fontWeight: 900,
+          color: color || "var(--text-primary)",
           fontFamily: "JetBrains Mono, monospace",
         }}
       >
         {value}
       </div>
       {sub && (
-        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{sub}</div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{sub}</div>
       )}
     </div>
   );
@@ -85,35 +143,33 @@ export default function DashboardPage() {
     transactions,
     getPortfolioValue,
     getTotalPnL,
+    getTotalRealizedPnL,
     addFunds,
     isAuthenticated,
     register,
+    updatePositionPrices,
   } = useAppStore();
   const [addingFunds, setAddingFunds] = useState(false);
   const [fundAmount, setFundAmount] = useState("100000");
   const [mounted, setMounted] = useState(false);
-  const { updatePositionPrices } = useAppStore();
-  // ✅ CORRECT — only registers once, never wipes existing data
+
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Separate effect, only runs if truly not authenticated
   useEffect(() => {
-    if (mounted && !isAuthenticated) {
-      register("Demo User", "demo@tradofly.com", 1000000);
-    }
+    if (mounted && !isAuthenticated)
+      register("Demo User", "demo@tradofly.com", 1_000_000);
   }, [mounted, isAuthenticated]);
 
   useEffect(() => {
     if (!mounted || positions.length === 0) return;
-
     async function refreshPrices() {
       const updates = await Promise.allSettled(
         positions.map(async (p) => {
           const res = await fetch(`/api/stock?symbol=${p.symbol}&type=quote`);
           const data = await res.json();
-          return { symbol: p.symbol, price: data.price };
+          return { symbol: p.symbol, price: data?.price || 0 };
         }),
       );
       const valid = updates
@@ -122,38 +178,46 @@ export default function DashboardPage() {
         .filter((v) => v.price > 0);
       if (valid.length > 0) updatePositionPrices(valid);
     }
-
     refreshPrices();
+    const iv = setInterval(refreshPrices, 30_000);
+    return () => clearInterval(iv);
   }, [mounted, positions.length]);
 
   if (!mounted) return null;
+
   const portfolioValue = getPortfolioValue();
   const { pnl, pnlPercent } = getTotalPnL();
+  const realizedPnl = getTotalRealizedPnL();
   const totalInvested = positions.reduce((s, p) => s + p.totalInvested, 0);
   const isUp = pnl >= 0;
+  const isRealizedUp = realizedPnl >= 0;
 
-  // Build portfolio history from transactions
+  // Portfolio history
   const portfolioHistory = (() => {
-    let balance = user?.initialBalance ?? 1000000;
-    const points: { date: string; value: number }[] = [
-      { date: "Start", value: balance },
+    let balance = user?.initialBalance ?? 1_000_000;
+    const points: { date: string; value: number; pnl: number }[] = [
+      { date: "Start", value: balance, pnl: 0 },
     ];
+    let cumPnl = 0;
     [...transactions].reverse().forEach((tx) => {
       if (tx.type === "DEPOSIT") balance += tx.total;
       else if (tx.type === "BUY") balance -= tx.total;
-      else if (tx.type === "SELL") balance += tx.total;
+      else if (tx.type === "SELL") {
+        balance += tx.total;
+        cumPnl += tx.realizedPnl ?? 0;
+      }
       points.push({
         date: new Date(tx.date).toLocaleDateString("en-IN", {
           day: "2-digit",
           month: "short",
         }),
         value: Math.max(0, balance),
+        pnl: cumPnl,
       });
     });
     return points.slice(-20);
   })();
 
-  // Pie chart data
   const pieData =
     positions.length > 0
       ? positions.map((p) => ({
@@ -171,6 +235,27 @@ export default function DashboardPage() {
     "#06B6D4",
     "#F97316",
   ];
+
+  // Trade stats
+  const sellTxs = transactions.filter(
+    (t) => t.type === "SELL" && t.realizedPnl !== undefined,
+  );
+  const winners = sellTxs.filter((t) => (t.realizedPnl ?? 0) > 0).length;
+  const winRate =
+    sellTxs.length > 0 ? ((winners / sellTxs.length) * 100).toFixed(0) : "—";
+  const avgWin =
+    winners > 0
+      ? sellTxs
+          .filter((t) => (t.realizedPnl ?? 0) > 0)
+          .reduce((s, t) => s + (t.realizedPnlPct ?? 0), 0) / winners
+      : 0;
+  const avgLoss =
+    sellTxs.length - winners > 0
+      ? sellTxs
+          .filter((t) => (t.realizedPnl ?? 0) <= 0)
+          .reduce((s, t) => s + (t.realizedPnlPct ?? 0), 0) /
+        (sellTxs.length - winners)
+      : 0;
 
   return (
     <AppLayout>
@@ -190,6 +275,7 @@ export default function DashboardPage() {
                 fontWeight: 800,
                 color: "var(--text-primary)",
                 fontFamily: "Syne, sans-serif",
+                margin: 0,
               }}
             >
               Welcome back, {user?.name?.split(" ")[0]} 👋
@@ -197,7 +283,16 @@ export default function DashboardPage() {
             <p
               style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}
             >
-              Here's your portfolio summary
+              Portfolio updated ·{" "}
+              <span
+                className="live-dot"
+                style={{
+                  display: "inline-block",
+                  verticalAlign: "middle",
+                  marginRight: 4,
+                }}
+              />
+              Live prices every 30s
             </p>
           </div>
           <button
@@ -233,15 +328,6 @@ export default function DashboardPage() {
               >
                 Add Paper Money
               </h3>
-              <p
-                style={{
-                  fontSize: 13,
-                  color: "var(--text-muted)",
-                  marginBottom: 16,
-                }}
-              >
-                Add virtual funds to your paper trading account.
-              </p>
               <div
                 style={{
                   display: "flex",
@@ -322,7 +408,7 @@ export default function DashboardPage() {
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(4, 1fr)",
-            gap: 16,
+            gap: 14,
           }}
         >
           <StatCard
@@ -333,45 +419,132 @@ export default function DashboardPage() {
             color="var(--accent-green)"
           />
           <StatCard
-            label="Total P&L"
-            value={`${isUp ? "+" : "-"}₹${Math.abs(pnl).toLocaleString(
-              "en-IN",
-              {
-                maximumFractionDigits: 0,
-              },
-            )}`}
-            sub={`${isUp ? "▲" : "▼"} ${Math.abs(pnlPercent).toFixed(2)}% overall`}
-            icon={isUp ? TrendingUp : TrendingDown}
-            color={isUp ? "var(--accent-green)" : "var(--accent-red)"}
+            label="Unrealized P&L"
+            value={
+              <AnimNumber
+                value={pnl}
+                prefix={pnl >= 0 ? "+₹" : "-₹"}
+                decimals={0}
+                color={pnl >= 0 ? "var(--accent-green)" : "var(--accent-red)"}
+              />
+            }
+            sub={`${pnlPercent >= 0 ? "▲" : "▼"} ${Math.abs(pnlPercent).toFixed(2)}% on holdings`}
+            icon={pnl >= 0 ? TrendingUp : TrendingDown}
+            color={pnl >= 0 ? "var(--accent-green)" : "var(--accent-red)"}
+          />
+          <StatCard
+            label="Realized P&L"
+            value={
+              <AnimNumber
+                value={realizedPnl}
+                prefix={realizedPnl >= 0 ? "+₹" : "-₹"}
+                decimals={0}
+                color={
+                  realizedPnl >= 0 ? "var(--accent-green)" : "var(--accent-red)"
+                }
+              />
+            }
+            sub={`${sellTxs.length} trades · ${winRate}% win rate`}
+            icon={realizedPnl >= 0 ? ArrowUpRight : ArrowDownRight}
+            color={
+              realizedPnl >= 0 ? "var(--accent-green)" : "var(--accent-red)"
+            }
           />
           <StatCard
             label="Invested"
             value={`₹${totalInvested.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`}
-            sub={`${positions.length} positions`}
+            sub={`${positions.length} positions open`}
             icon={BarChart2}
             color="var(--accent-blue)"
           />
-          <StatCard
-            label="Transactions"
-            value={
-              transactions.filter((t) => t.type === "BUY" || t.type === "SELL")
-                .length
-            }
-            sub={`${transactions.filter((t) => t.type === "BUY").length} buys · ${transactions.filter((t) => t.type === "SELL").length} sells`}
-            icon={Clock}
-            color="var(--accent-amber)"
-          />
         </div>
+
+        {/* Trade stats row */}
+        {sellTxs.length > 0 && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 14,
+            }}
+          >
+            {[
+              {
+                label: "Win Rate",
+                value: `${winRate}%`,
+                sub: `${winners}W / ${sellTxs.length - winners}L`,
+                color: "var(--accent-green)",
+              },
+              {
+                label: "Avg Win",
+                value: `+${avgWin.toFixed(1)}%`,
+                sub: "per winning trade",
+                color: "var(--accent-green)",
+              },
+              {
+                label: "Avg Loss",
+                value: `${avgLoss.toFixed(1)}%`,
+                sub: "per losing trade",
+                color: "var(--accent-red)",
+              },
+              {
+                label: "Total Trades",
+                value: transactions.filter(
+                  (t) => t.type === "BUY" || t.type === "SELL",
+                ).length,
+                sub: `${transactions.filter((t) => t.type === "BUY").length} buys · ${transactions.filter((t) => t.type === "SELL").length} sells`,
+                color: "var(--accent-amber)",
+              },
+            ].map(({ label, value, sub, color }) => (
+              <div
+                key={label}
+                className="card"
+                style={{ padding: "14px 18px" }}
+              >
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: "var(--text-muted)",
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    marginBottom: 4,
+                  }}
+                >
+                  {label}
+                </div>
+                <div
+                  style={{
+                    fontSize: 20,
+                    fontWeight: 900,
+                    fontFamily: "JetBrains Mono",
+                    color,
+                  }}
+                >
+                  {value}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                    marginTop: 2,
+                  }}
+                >
+                  {sub}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Charts Row */}
         <div
-          style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 16 }}
+          style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 16 }}
         >
-          {/* Portfolio Value Chart */}
           <div className="card" style={{ padding: 20 }}>
             <div
               style={{
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: 700,
                 color: "var(--text-secondary)",
                 marginBottom: 16,
@@ -383,7 +556,21 @@ export default function DashboardPage() {
             </div>
             {portfolioHistory.length > 1 ? (
               <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={portfolioHistory}>
+                <AreaChart data={portfolioHistory}>
+                  <defs>
+                    <linearGradient id="portGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop
+                        offset="5%"
+                        stopColor="var(--accent-green)"
+                        stopOpacity={0.15}
+                      />
+                      <stop
+                        offset="95%"
+                        stopColor="var(--accent-green)"
+                        stopOpacity={0.01}
+                      />
+                    </linearGradient>
+                  </defs>
                   <XAxis
                     dataKey="date"
                     tick={{ fontSize: 10, fill: "var(--text-muted)" }}
@@ -395,7 +582,7 @@ export default function DashboardPage() {
                     tick={{ fontSize: 10, fill: "var(--text-muted)" }}
                     tickLine={false}
                     axisLine={false}
-                    width={60}
+                    width={56}
                   />
                   <Tooltip
                     formatter={(v: any) => [
@@ -409,14 +596,15 @@ export default function DashboardPage() {
                       fontSize: 12,
                     }}
                   />
-                  <Line
+                  <Area
                     type="monotone"
                     dataKey="value"
                     stroke="var(--accent-green)"
                     strokeWidth={2}
+                    fill="url(#portGrad)"
                     dot={false}
                   />
-                </LineChart>
+                </AreaChart>
               </ResponsiveContainer>
             ) : (
               <div
@@ -434,11 +622,10 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Allocation Pie */}
           <div className="card" style={{ padding: 20 }}>
             <div
               style={{
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: 700,
                 color: "var(--text-secondary)",
                 marginBottom: 16,
@@ -448,14 +635,14 @@ export default function DashboardPage() {
             >
               Allocation
             </div>
-            <ResponsiveContainer width="100%" height={160}>
+            <ResponsiveContainer width="100%" height={150}>
               <PieChart>
                 <Pie
                   data={pieData}
                   cx="50%"
                   cy="50%"
                   innerRadius={45}
-                  outerRadius={70}
+                  outerRadius={65}
                   paddingAngle={3}
                   dataKey="value"
                 >
@@ -481,8 +668,8 @@ export default function DashboardPage() {
               style={{
                 display: "flex",
                 flexDirection: "column",
-                gap: 6,
-                marginTop: 8,
+                gap: 5,
+                marginTop: 6,
               }}
             >
               {pieData.slice(0, 5).map((d, i) => (
@@ -514,10 +701,13 @@ export default function DashboardPage() {
                       fontSize: 11,
                       fontWeight: 600,
                       color: "var(--text-primary)",
-                      fontFamily: "JetBrains Mono, monospace",
+                      fontFamily: "JetBrains Mono",
                     }}
                   >
-                    {((d.value / portfolioValue) * 100).toFixed(1)}%
+                    {portfolioValue > 0
+                      ? ((d.value / portfolioValue) * 100).toFixed(1)
+                      : "0"}
+                    %
                   </span>
                 </div>
               ))}
@@ -538,7 +728,7 @@ export default function DashboardPage() {
           >
             <span
               style={{
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: 700,
                 color: "var(--text-secondary)",
                 textTransform: "uppercase",
@@ -568,89 +758,221 @@ export default function DashboardPage() {
               <thead>
                 <tr>
                   <th>Symbol</th>
-                  <th>Qty</th>
-                  <th>Avg Price</th>
-                  <th>Current</th>
-                  <th>Invested</th>
-                  <th>Value</th>
-                  <th>P&L</th>
-                  <th>P&L %</th>
+                  <th style={{ textAlign: "right" }}>Qty</th>
+                  <th style={{ textAlign: "right" }}>Avg</th>
+                  <th style={{ textAlign: "right" }}>LTP</th>
+                  <th style={{ textAlign: "right" }}>Target</th>
+                  <th style={{ textAlign: "right" }}>Stop</th>
+                  <th style={{ textAlign: "right" }}>Invested</th>
+                  <th style={{ textAlign: "right" }}>Value</th>
+                  <th style={{ textAlign: "right" }}>P&L</th>
                 </tr>
               </thead>
               <tbody>
-                {positions.map((p) => (
-                  <tr key={p.symbol}>
-                    <td
-                      style={{
-                        fontWeight: 700,
-                        fontFamily: "JetBrains Mono, monospace",
-                      }}
-                    >
-                      {p.symbol.replace(".NS", "").replace(".BO", "")}
-                    </td>
-                    <td style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                      {p.quantity}
-                    </td>
-                    <td style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                      ₹{p.avgBuyPrice.toFixed(2)}
-                    </td>
-                    <td style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                      ₹{p.currentPrice.toFixed(2)}
-                    </td>
-                    <td style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                      ₹
-                      {p.totalInvested.toLocaleString("en-IN", {
-                        maximumFractionDigits: 0,
-                      })}
-                    </td>
-                    <td style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                      ₹
-                      {p.currentValue.toLocaleString("en-IN", {
-                        maximumFractionDigits: 0,
-                      })}
-                    </td>
-                    <td
-                      className={p.pnl >= 0 ? "price-up" : "price-down"}
-                      style={{ fontFamily: "JetBrains Mono, monospace" }}
-                    >
-                      {p.pnl >= 0 ? "+" : "-"}₹
-                      {Math.abs(p.pnl).toLocaleString("en-IN", {
-                        maximumFractionDigits: 0,
-                      })}
-                    </td>
-                    <td
-                      className={p.pnl >= 0 ? "price-up" : "price-down"}
-                      style={{ fontFamily: "JetBrains Mono, monospace" }}
-                    >
-                      {p.pnl >= 0 ? "+" : ""}
-                      {p.pnlPercent.toFixed(2)}%
-                    </td>
-                  </tr>
-                ))}
+                {positions.map((p) => {
+                  const targetHit =
+                    p.targetPrice && p.currentPrice >= p.targetPrice;
+                  const slHit =
+                    p.stopLossPrice && p.currentPrice <= p.stopLossPrice;
+                  return (
+                    <tr key={p.symbol}>
+                      <td>
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            fontFamily: "JetBrains Mono",
+                            fontSize: 13,
+                          }}
+                        >
+                          {p.symbol.replace(".NS", "").replace(".BO", "")}
+                        </div>
+                        <div
+                          style={{ fontSize: 10, color: "var(--text-muted)" }}
+                        >
+                          {p.name}
+                        </div>
+                      </td>
+                      <td
+                        style={{
+                          textAlign: "right",
+                          fontFamily: "JetBrains Mono",
+                          fontSize: 13,
+                        }}
+                      >
+                        {p.quantity}
+                      </td>
+                      <td
+                        style={{
+                          textAlign: "right",
+                          fontFamily: "JetBrains Mono",
+                          fontSize: 12,
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        ₹{p.avgBuyPrice.toFixed(2)}
+                      </td>
+                      <td
+                        style={{
+                          textAlign: "right",
+                          fontFamily: "JetBrains Mono",
+                          fontWeight: 700,
+                          fontSize: 13,
+                        }}
+                      >
+                        ₹{p.currentPrice.toFixed(2)}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        {p.targetPrice ? (
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontFamily: "JetBrains Mono",
+                              color: targetHit ? "#fff" : "var(--accent-green)",
+                              background: targetHit
+                                ? "var(--accent-green)"
+                                : "var(--accent-green-bg)",
+                              padding: "2px 6px",
+                              borderRadius: 5,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {targetHit ? "🎯" : "▲"} ₹{p.targetPrice.toFixed(0)}
+                          </span>
+                        ) : (
+                          <span
+                            style={{ color: "var(--text-muted)", fontSize: 11 }}
+                          >
+                            —
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        {p.stopLossPrice ? (
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontFamily: "JetBrains Mono",
+                              color: slHit ? "#fff" : "var(--accent-red)",
+                              background: slHit
+                                ? "var(--accent-red)"
+                                : "var(--accent-red-bg)",
+                              padding: "2px 6px",
+                              borderRadius: 5,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {slHit ? "⚠️" : "▼"} ₹{p.stopLossPrice.toFixed(0)}
+                          </span>
+                        ) : (
+                          <span
+                            style={{ color: "var(--text-muted)", fontSize: 11 }}
+                          >
+                            —
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        style={{
+                          textAlign: "right",
+                          fontFamily: "JetBrains Mono",
+                          fontSize: 12,
+                        }}
+                      >
+                        ₹
+                        {p.totalInvested.toLocaleString("en-IN", {
+                          maximumFractionDigits: 0,
+                        })}
+                      </td>
+                      <td
+                        style={{
+                          textAlign: "right",
+                          fontFamily: "JetBrains Mono",
+                          fontSize: 12,
+                        }}
+                      >
+                        ₹
+                        {p.currentValue.toLocaleString("en-IN", {
+                          maximumFractionDigits: 0,
+                        })}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontFamily: "JetBrains Mono",
+                            fontWeight: 700,
+                            color:
+                              p.pnl >= 0
+                                ? "var(--accent-green)"
+                                : "var(--accent-red)",
+                          }}
+                        >
+                          {p.pnl >= 0 ? "+" : ""}₹
+                          {Math.abs(p.pnl).toLocaleString("en-IN", {
+                            maximumFractionDigits: 0,
+                          })}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 10,
+                            color:
+                              p.pnl >= 0
+                                ? "var(--accent-green)"
+                                : "var(--accent-red)",
+                          }}
+                        >
+                          {p.pnl >= 0 ? "+" : ""}
+                          {p.pnlPercent.toFixed(2)}%
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
         </div>
 
-        {/* Recent Transactions */}
+        {/* Transactions Table — WITH P&L COLUMN */}
         <div className="card" style={{ overflow: "hidden" }}>
           <div
             style={{
               padding: "16px 20px",
               borderBottom: "1px solid var(--border-card)",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
             }}
           >
             <span
               style={{
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: 700,
                 color: "var(--text-secondary)",
                 textTransform: "uppercase",
                 letterSpacing: "0.06em",
               }}
             >
-              Recent Transactions
+              Transaction History
             </span>
+            {realizedPnl !== 0 && (
+              <span
+                style={{
+                  fontSize: 13,
+                  fontWeight: 800,
+                  fontFamily: "JetBrains Mono",
+                  color:
+                    realizedPnl >= 0
+                      ? "var(--accent-green)"
+                      : "var(--accent-red)",
+                }}
+              >
+                Total Realized: {realizedPnl >= 0 ? "+" : ""}₹
+                {Math.abs(realizedPnl).toLocaleString("en-IN", {
+                  maximumFractionDigits: 0,
+                })}
+              </span>
+            )}
           </div>
           {transactions.length === 0 ? (
             <div
@@ -670,20 +992,22 @@ export default function DashboardPage() {
                   <th>Date</th>
                   <th>Type</th>
                   <th>Symbol</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Total</th>
-                  <th>Status</th>
+                  <th style={{ textAlign: "right" }}>Qty</th>
+                  <th style={{ textAlign: "right" }}>Buy Avg</th>
+                  <th style={{ textAlign: "right" }}>Sell Price</th>
+                  <th style={{ textAlign: "right" }}>Total</th>
+                  <th style={{ textAlign: "right" }}>Realized P&L</th>
+                  <th style={{ textAlign: "right" }}>Held</th>
                 </tr>
               </thead>
               <tbody>
-                {transactions.slice(0, 20).map((tx) => (
+                {transactions.slice(0, 30).map((tx) => (
                   <tr key={tx.id}>
                     <td
                       style={{
                         fontSize: 11,
                         color: "var(--text-muted)",
-                        fontFamily: "JetBrains Mono, monospace",
+                        fontFamily: "JetBrains Mono",
                       }}
                     >
                       {new Date(tx.date).toLocaleString("en-IN", {
@@ -716,22 +1040,55 @@ export default function DashboardPage() {
                     </td>
                     <td
                       style={{
-                        fontWeight: 600,
-                        fontFamily: "JetBrains Mono, monospace",
+                        fontWeight: 700,
+                        fontFamily: "JetBrains Mono",
+                        fontSize: 12,
                       }}
                     >
-                      {tx.symbol}
-                    </td>
-                    <td style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                      {tx.quantity || "—"}
-                    </td>
-                    <td style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                      {tx.price > 0 ? `₹${tx.price.toFixed(2)}` : "—"}
+                      {tx.symbol === "CASH"
+                        ? "—"
+                        : tx.symbol.replace(".NS", "").replace(".BO", "")}
                     </td>
                     <td
                       style={{
-                        fontFamily: "JetBrains Mono, monospace",
+                        textAlign: "right",
+                        fontFamily: "JetBrains Mono",
+                        fontSize: 12,
+                      }}
+                    >
+                      {tx.quantity || "—"}
+                    </td>
+                    {/* Buy avg — shown on SELL rows only */}
+                    <td
+                      style={{
+                        textAlign: "right",
+                        fontFamily: "JetBrains Mono",
+                        fontSize: 12,
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {tx.type === "SELL" && tx.avgBuyPrice
+                        ? `₹${tx.avgBuyPrice.toFixed(2)}`
+                        : tx.type === "BUY"
+                          ? `₹${tx.price.toFixed(2)}`
+                          : "—"}
+                    </td>
+                    {/* Sell price — shown on SELL rows only */}
+                    <td
+                      style={{
+                        textAlign: "right",
+                        fontFamily: "JetBrains Mono",
+                        fontSize: 12,
+                      }}
+                    >
+                      {tx.type === "SELL" ? `₹${tx.price.toFixed(2)}` : "—"}
+                    </td>
+                    <td
+                      style={{
+                        textAlign: "right",
+                        fontFamily: "JetBrains Mono",
                         fontWeight: 600,
+                        fontSize: 12,
                       }}
                     >
                       ₹
@@ -739,16 +1096,75 @@ export default function DashboardPage() {
                         maximumFractionDigits: 0,
                       })}
                     </td>
-                    <td>
-                      <span
-                        className="tag"
-                        style={{
-                          background: "var(--accent-green-bg)",
-                          color: "var(--accent-green)",
-                        }}
-                      >
-                        {tx.status}
-                      </span>
+                    {/* ★ REALIZED P&L COLUMN ★ */}
+                    <td style={{ textAlign: "right" }}>
+                      {tx.type === "SELL" && tx.realizedPnl !== undefined ? (
+                        <div>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              fontFamily: "JetBrains Mono",
+                              fontWeight: 800,
+                              color:
+                                tx.realizedPnl >= 0
+                                  ? "var(--accent-green)"
+                                  : "var(--accent-red)",
+                            }}
+                          >
+                            {tx.realizedPnl >= 0 ? "+" : ""}₹
+                            {Math.abs(tx.realizedPnl).toLocaleString("en-IN", {
+                              maximumFractionDigits: 0,
+                            })}
+                          </div>
+                          {tx.realizedPnlPct !== undefined && (
+                            <div
+                              style={{
+                                fontSize: 10,
+                                color:
+                                  tx.realizedPnl >= 0
+                                    ? "var(--accent-green)"
+                                    : "var(--accent-red)",
+                                fontWeight: 700,
+                                fontFamily: "JetBrains Mono",
+                              }}
+                            >
+                              {tx.realizedPnl >= 0 ? "+" : ""}
+                              {tx.realizedPnlPct.toFixed(2)}%
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span
+                          style={{ color: "var(--text-muted)", fontSize: 11 }}
+                        >
+                          {tx.type === "BUY" ? (
+                            <span
+                              style={{
+                                fontSize: 10,
+                                color: "var(--text-muted)",
+                                fontStyle: "italic",
+                              }}
+                            >
+                              Open
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </span>
+                      )}
+                    </td>
+                    {/* Days held */}
+                    <td
+                      style={{
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: "var(--text-muted)",
+                        fontFamily: "JetBrains Mono",
+                      }}
+                    >
+                      {tx.type === "SELL" && tx.holdingDays !== undefined
+                        ? `${tx.holdingDays}d`
+                        : "—"}
                     </td>
                   </tr>
                 ))}

@@ -93,6 +93,7 @@ export interface Position {
 }
 
 export interface Transaction {
+  pnl: number;
   id: string;
   userId: string;
   symbol: string;
